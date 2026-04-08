@@ -61,19 +61,24 @@ function generateWeeklyReport(weekNumber) {
   events.push(...weekPlans.map(p => ({ ...p, type: 'plan' })));
   
   // 2. 统计
+  const totalPlans = weekPlans.length;
+  const completed = weekPlans.filter(p => p.lifecycle?.status === 'completed').length;
+  const cancelled = weekPlans.filter(p => p.lifecycle?.status === 'cancelled').length;
+  const expired = weekPlans.filter(p => p.lifecycle?.status === 'expired').length;
+  const active = weekPlans.filter(p => p.lifecycle?.status === 'active').length;
+  
   const stats = {
     totalEvents: events.length,
+    totalPlans,
     byType: groupBy(events, 'type'),
     byStatus: groupBy(events, 'lifecycle.status'),
-    totalPlans: weekPlans.length,
-    completed: weekPlans.filter(p => p.lifecycle?.status === 'completed').length,
-    cancelled: weekPlans.filter(p => p.lifecycle?.status === 'cancelled').length,
-    expired: weekPlans.filter(p => p.lifecycle?.status === 'expired').length
+    completed,
+    cancelled,
+    expired,
+    active,
+    completionRate: totalPlans > 0 ? (completed / totalPlans).toFixed(2) : 0,
+    cancelRate: totalPlans > 0 ? (cancelled / totalPlans).toFixed(2) : 0
   };
-  
-  stats.completionRate = stats.totalPlans > 0 
-    ? (stats.completed / stats.totalPlans).toFixed(2)
-    : 0;
   
   const report = {
     week: weekNumber,

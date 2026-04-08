@@ -355,7 +355,88 @@ function appendPlan(plan) {
 }
 
 /**
- * 删除事件
+ * 取消事件（保留历史，移动到归档区）
+ * @param {string} planId - 事件 ID
+ * @param {string} reason - 取消原因
+ * @returns {{ success: boolean, archived: boolean, error?: string }}
+ */
+function cancelPlan(planId, reason = '用户取消') {
+  const lockFile = getPlansFile() + '.lock';
+  
+  if (!acquireLock(lockFile)) {
+    return { success: false, error: '无法获取文件锁' };
+  }
+  
+  try {
+    const plansFile = getPlansFile();
+    let data;
+    
+    if (fs.existsSync(plansFile)) {
+      const content = fs.readFileSync(plansFile, 'utf8');
+      data = JSON.parse(content);
+    } else {
+      return { success: false, error: '事件文件不存在' };
+    }
+    
+    // 找到要取消的事件
+    const planIndex = data.plans.findIndex(p => p.id === planId);
+    if (planIndex === -1) {
+      return { success: false, error: '未找到事件' };
+    }
+    
+    const plan = data.plans[planIndex];
+    
+    // 标记为 cancelled
+    plan.lifecycle = {
+      ...plan.lifecycle,
+      status: 'cancelled',
+      cancelledAt: new Date().toISOString(),
+      cancelReason: reason
+    };
+    
+    // 归档到本周
+    const metadata = readMetadata();
+    const currentWeek = metadata.currentWeek;
+    const archiveDir = getArchiveDir(metadata.semester);
+    const plansArchiveDir = path.join(archiveDir, 'plans');
+    
+    if (!fs.existsSync(plansArchiveDir)) {
+      fs.mkdirSync(plansArchiveDir, { recursive: true });
+    }
+    
+    const archiveFile = path.join(plansArchiveDir, `week-${currentWeek}.json`);
+    let weekData = { week: currentWeek, plans: [], archivedAt: new Date().toISOString() };
+    
+    if (fs.existsSync(archiveFile)) {
+      weekData = JSON.parse(fs.readFileSync(archiveFile, 'utf8'));
+    }
+    
+    // 添加到归档
+    weekData.plans.push(plan);
+    fs.writeFileSync(archiveFile, JSON.stringify(weekData, null, 2), 'utf8');
+    
+    // 从 active 中删除
+    data.plans.splice(planIndex, 1);
+    data.metadata.updatedAt = new Date().toISOString();
+    
+    atomicWrite(plansFile, data);
+    
+    console.log(`✅ 取消事件：${plan.title} (原因：${reason})`);
+    
+    return { success: true, archived: true, plan };
+    
+  } catch (error) {
+    console.error('取消事件失败:', error.message);
+    return { success: false, error: error.message };
+  } finally {
+    releaseLock(lockFile);
+  }
+}
+
+/**
+ * 删除事件（物理删除，不保留历史）
+ * @param {string} planId - 事件 ID
+ * @returns {{ success: boolean, archived: boolean }}
  */
 function deletePlan(planId) {
   return lockedWrite(getPlansFile(), (data) => {
@@ -364,6 +445,7 @@ function deletePlan(planId) {
     }
     
     const initialLength = data.plans.length;
+    const plan = data.plans.find(p => p.id === planId);
     data.plans = data.plans.filter(p => p.id !== planId);
     
     if (data.plans.length === initialLength) {
@@ -371,6 +453,9 @@ function deletePlan(planId) {
     }
     
     data.metadata.updatedAt = new Date().toISOString();
+    
+    console.log(`🗑️  物理删除事件：${plan?.title || planId}`);
+    
     return data;
   });
 }

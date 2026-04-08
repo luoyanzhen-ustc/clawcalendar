@@ -69,8 +69,18 @@ const TOOLS_TO_REGISTER = [
     function: 'appendPlan'
   },
   {
+    name: 'calendar_cancel_plan',
+    description: '取消事件（保留历史，移动到归档区）',
+    params: [
+      { name: 'planId', description: '事件 ID', required: true },
+      { name: 'reason', description: '取消原因，可选', required: false }
+    ],
+    module: 'file-ops',
+    function: 'cancelPlan'
+  },
+  {
     name: 'calendar_delete_plan',
-    description: '删除指定事件',
+    description: '物理删除事件（不保留历史，用于错误数据）',
     params: [{ name: 'planId', description: '事件 ID', required: true }],
     module: 'file-ops',
     function: 'deletePlan'
