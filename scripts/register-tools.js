@@ -1,91 +1,167 @@
 #!/usr/bin/env node
 
 /**
- * OpenClaw 工具注册脚本
+ * Claw Calendar 工具注册脚本
  * 
- * 将 claw-calendar 的工具函数注册为 OpenClaw 原生工具
+ * 将所有工具函数注册为 OpenClaw 原生工具
+ * 安装时自动调用，无需手动配置
  */
 
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
 
 // 工具目录
 const TOOLS_DIR = path.join(__dirname, '..', 'skill', 'tools');
 
 /**
- * 扫描工具目录，获取所有可注册的函数
+ * 需要注册的工具列表
+ * 格式：{ 工具名称，描述，参数，模块，函数 }
  */
-function scanTools() {
-  const tools = {};
+const TOOLS_TO_REGISTER = [
+  // 文件操作工具
+  {
+    name: 'calendar_read_events',
+    description: '读取所有日历事件',
+    params: [],
+    module: 'file-ops',
+    function: 'readEvents'
+  },
+  {
+    name: 'calendar_append_event',
+    description: '添加单个事件到日历',
+    params: [{ name: 'event', description: '事件对象', required: true }],
+    module: 'file-ops',
+    function: 'appendEvent'
+  },
+  {
+    name: 'calendar_delete_event',
+    description: '删除指定事件',
+    params: [{ name: 'eventId', description: '事件 ID', required: true }],
+    module: 'file-ops',
+    function: 'deleteEvent'
+  },
+  {
+    name: 'calendar_read_settings',
+    description: '读取用户设置',
+    params: [],
+    module: 'file-ops',
+    function: 'readSettings'
+  },
+  {
+    name: 'calendar_write_settings',
+    description: '写入用户设置',
+    params: [{ name: 'settings', description: '设置对象', required: true }],
+    module: 'file-ops',
+    function: 'writeSettings'
+  },
+  {
+    name: 'calendar_get_reminders',
+    description: '获取即将发生的事件（智能过滤，用于提醒）',
+    params: [{ name: 'advanceMinutes', description: '提前多少分钟，默认 30', required: false }],
+    module: 'file-ops',
+    function: 'get_upcoming_reminders'
+  },
+  {
+    name: 'calendar_is_quiet_hours',
+    description: '检查当前是否在静默时段（23:00-08:00）',
+    params: [{ name: 'date', description: '要检查的时间，默认现在', required: false }],
+    module: 'file-ops',
+    function: 'isQuietHours'
+  },
   
-  const files = fs.readdirSync(TOOLS_DIR);
+  // 日期计算工具
+  {
+    name: 'calendar_get_current_week',
+    description: '计算当前周次（相对于学期开始日期）',
+    params: [{ name: 'semesterStart', description: '学期开始日期 YYYY-MM-DD', required: true }],
+    module: 'date-math',
+    function: 'getCurrentWeek'
+  },
+  {
+    name: 'calendar_parse_relative_time',
+    description: '解析相对时间表达（如"明天下午 3 点"）',
+    params: [
+      { name: 'text', description: '时间表达', required: true },
+      { name: 'baseDate', description: '基准时间，默认现在', required: false }
+    ],
+    module: 'date-math',
+    function: 'parseRelativeTime'
+  },
+  {
+    name: 'calendar_format_date',
+    description: '格式化日期为 YYYY-MM-DD',
+    params: [{ name: 'date', description: 'Date 对象或时间戳', required: true }],
+    module: 'date-math',
+    function: 'formatDate'
+  },
+  {
+    name: 'calendar_format_time',
+    description: '格式化时间为 HH:MM',
+    params: [{ name: 'date', description: 'Date 对象或时间戳', required: true }],
+    module: 'date-math',
+    function: 'formatTime'
+  },
+  {
+    name: 'calendar_get_weekday_name',
+    description: '获取星期几（如"周一"）',
+    params: [{ name: 'date', description: 'Date 对象，默认现在', required: false }],
+    module: 'date-math',
+    function: 'getWeekdayName'
+  },
   
-  for (const file of files) {
-    if (!file.endsWith('.js')) {
-      continue;
-    }
-    
-    const filePath = path.join(TOOLS_DIR, file);
-    const moduleName = path.basename(file, '.js');
-    
-    try {
-      // 加载模块
-      const mod = require(filePath);
-      
-      // 获取所有导出的函数
-      const exports = Object.keys(mod).filter(key => typeof mod[key] === 'function');
-      
-      tools[moduleName] = {
-        path: filePath,
-        exports: exports,
-        functions: {}
-      };
-      
-      for (const fnName of exports) {
-        tools[moduleName].functions[fnName] = {
-          name: `${moduleName}_${fnName}`,
-          module: moduleName,
-          function: fnName,
-          path: filePath
-        };
-      }
-    } catch (error) {
-      console.error(`加载工具模块失败 ${file}:`, error.message);
-    }
+  // OCR 工具
+  {
+    name: 'calendar_parse_schedule_image',
+    description: '识别课表图片（需要传入图片路径）',
+    params: [
+      { name: 'imagePath', description: '图片路径', required: true },
+      { name: 'callModel', description: '调用模型的函数', required: true }
+    ],
+    module: 'ocr-wrapper',
+    function: 'parseScheduleImage'
+  },
+  {
+    name: 'calendar_courses_to_events',
+    description: '将课程列表转换为事件数组',
+    params: [{ name: 'courses', description: '课程数组', required: true }],
+    module: 'ocr-wrapper',
+    function: 'coursesToEvents'
   }
-  
-  return tools;
+];
+
+/**
+ * 生成工具配置文件
+ */
+function generateToolConfig(tool) {
+  return {
+    name: tool.name,
+    description: tool.description,
+    category: 'calendar',
+    module: `claw-calendar/tools/${tool.module}`,
+    function: tool.function,
+    params: tool.params || [],
+    version: '2.2.0',
+    createdAt: new Date().toISOString()
+  };
 }
 
 /**
- * 注册单个工具到 OpenClaw
+ * 注册单个工具
  */
-function registerTool(toolInfo) {
-  const toolName = toolInfo.name;
+function registerTool(tool) {
+  const config = generateToolConfig(tool);
+  const toolsDir = path.join(process.env.HOME || '/root', '.openclaw', 'tools', 'calendar');
+  const configFile = path.join(toolsDir, `${tool.name}.json`);
   
-  // 工具元数据
-  const metadata = {
-    name: toolName,
-    description: `Claw Calendar 工具 - ${toolInfo.module}.${toolInfo.function}`,
-    module: toolInfo.module,
-    function: toolInfo.function,
-    path: toolInfo.path,
-    category: 'calendar'
-  };
-  
-  console.log(`🔧 注册工具：${toolName}`);
-  
-  // 写入工具配置文件
-  const toolsConfigDir = path.join(process.env.HOME || process.env.USERPROFILE, '.openclaw', 'tools');
-  const toolsConfigFile = path.join(toolsConfigDir, `${toolName}.json`);
-  
-  if (!fs.existsSync(toolsConfigDir)) {
-    fs.mkdirSync(toolsConfigDir, { recursive: true });
+  // 确保目录存在
+  if (!fs.existsSync(toolsDir)) {
+    fs.mkdirSync(toolsDir, { recursive: true });
   }
   
-  fs.writeFileSync(toolsConfigFile, JSON.stringify(metadata, null, 2), 'utf8');
+  // 写入配置文件
+  fs.writeFileSync(configFile, JSON.stringify(config, null, 2), 'utf8');
   
+  console.log(`  ✅ ${tool.name}`);
   return true;
 }
 
@@ -95,142 +171,67 @@ function registerTool(toolInfo) {
 function registerAllTools() {
   console.log('🚀 开始注册 Claw Calendar 工具...\n');
   
-  const tools = scanTools();
   let registered = 0;
+  let failed = 0;
   
-  for (const moduleName in tools) {
-    const module = tools[moduleName];
-    
-    console.log(`📦 模块：${moduleName}`);
-    
-    for (const fnName in module.functions) {
-      const toolInfo = module.functions[fnName];
-      
-      // 只注册核心工具（过滤内部函数）
-      if (shouldRegister(toolInfo)) {
-        if (registerTool(toolInfo)) {
-          registered++;
-          console.log(`  ✅ ${toolInfo.name}`);
-        }
-      } else {
-        console.log(`  ⏭️  跳过：${toolInfo.name}（内部函数）`);
+  for (const tool of TOOLS_TO_REGISTER) {
+    try {
+      if (registerTool(tool)) {
+        registered++;
       }
+    } catch (error) {
+      console.error(`  ❌ ${tool.name}: ${error.message}`);
+      failed++;
     }
-    
-    console.log();
   }
   
-  console.log(`✅ 注册完成！共注册 ${registered} 个工具\n`);
+  console.log(`\n✅ 注册完成！`);
+  console.log(`   成功：${registered} 个工具`);
+  console.log(`   失败：${failed} 个工具\n`);
   
-  return registered;
+  return { registered, failed };
 }
 
 /**
- * 判断是否应该注册该工具
+ * 生成工具文档（用于 SKILL.md）
  */
-function shouldRegister(toolInfo) {
-  // 不注册的函数模式
-  const skipPatterns = [
-    /^_/,           // 下划线开头的私有函数
-    /^ensure/,      // 辅助函数
-    /^get.*Path$/,  // 路径获取函数
-    /^acquireLock$/, // 锁相关
-    /^releaseLock$/,
-    /^atomicWrite$/,
-    /^lockedWrite$/,
-    /^processExists$/
-  ];
+function generateToolDocs() {
+  const docs = ['# Claw Calendar 工具列表\n\n'];
+  docs.push('## 核心工具\n\n');
+  docs.push('| 工具名称 | 功能 | 参数 |\n');
+  docs.push('|----------|------|------|\n');
   
-  const name = toolInfo.function;
-  
-  for (const pattern of skipPatterns) {
-    if (pattern.test(name)) {
-      return false;
-    }
+  for (const tool of TOOLS_TO_REGISTER) {
+    const params = tool.params.length === 0 ? '无' : tool.params.map(p => p.name).join(', ');
+    docs.push(`| \`${tool.name}\` | ${tool.description} | ${params} |\n`);
   }
   
-  // 只注册核心业务函数
-  const registerList = [
-    'readEvents',
-    'writeEvents',
-    'appendEvent',
-    'deleteEvent',
-    'readSettings',
-    'writeSettings',
-    'get_upcoming_reminders',
-    'isQuietHours',
-    'getCurrentWeek',
-    'parseRelativeTime',
-    'formatDate',
-    'formatTime',
-    'getWeekdayName',
-    'parseScheduleImage',
-    'coursesToEvents'
-  ];
-  
-  return registerList.includes(name);
+  return docs.join('');
 }
 
 /**
- * 生成工具调用示例（用于 SKILL.md）
+ * 主函数
  */
-function generateToolExamples() {
-  const tools = scanTools();
-  const examples = [];
-  
-  examples.push('# Claw Calendar 工具调用示例\n');
-  examples.push('## 核心工具\n');
-  
-  for (const moduleName in tools) {
-    const module = tools[moduleName];
-    
-    for (const fnName in module.functions) {
-      const toolInfo = module.functions[fnName];
-      
-      if (shouldRegister(toolInfo)) {
-        examples.push(`### ${toolInfo.name}`);
-        examples.push(`\n**功能**: ${toolInfo.module}.${toolInfo.function}\n`);
-        examples.push(`**调用方式**: 在 SKILL.md 中直接使用工具名称\n`);
-        examples.push(`**示例**:\n`);
-        examples.push(`\`\`\`\n调用 ${toolInfo.name}()\n\`\`\`\n`);
-        examples.push('---\n');
-      }
-    }
-  }
-  
-  return examples.join('\n');
-}
-
-// 主函数
 function main() {
   const args = process.argv.slice(2);
   
-  if (args.includes('--generate-examples')) {
-    // 生成工具调用示例
-    const examples = generateToolExamples();
-    const outputPath = path.join(__dirname, '..', 'docs', 'TOOLS_USAGE.md');
+  if (args.includes('--docs')) {
+    // 生成工具文档
+    const docs = generateToolDocs();
+    const outputPath = path.join(__dirname, '..', 'docs', 'TOOLS.md');
     
     if (!fs.existsSync(path.dirname(outputPath))) {
       fs.mkdirSync(path.dirname(outputPath), { recursive: true });
     }
     
-    fs.writeFileSync(outputPath, examples, 'utf8');
-    console.log(`✅ 工具调用示例已生成：${outputPath}`);
+    fs.writeFileSync(outputPath, docs, 'utf8');
+    console.log(`✅ 工具文档已生成：${outputPath}`);
     
   } else if (args.includes('--list')) {
-    // 列出所有可注册的工具
-    const tools = scanTools();
-    console.log('可注册的工具:\n');
-    
-    for (const moduleName in tools) {
-      const module = tools[moduleName];
-      console.log(`${moduleName}:`);
-      
-      for (const fnName in module.functions) {
-        const toolInfo = module.functions[fnName];
-        const status = shouldRegister(toolInfo) ? '✅' : '⏭️';
-        console.log(`  ${status} ${toolInfo.name}`);
-      }
+    // 列出所有工具
+    console.log('Claw Calendar 工具列表:\n');
+    for (const tool of TOOLS_TO_REGISTER) {
+      console.log(`- ${tool.name}: ${tool.description}`);
     }
     
   } else {
