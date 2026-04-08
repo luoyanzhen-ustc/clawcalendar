@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 
 /**
- * 文件操作工具
+ * 文件操作工具 v2.0
  * 
- * 重构版本：
- * - 动态路径（支持环境变量）
- * - 原子写入（临时文件 + renameSync）
- * - 文件锁（防止并发冲突）
- * - 新增 get_upcoming_reminders() 过滤函数
+ * 重构内容：
+ * - 时区协调：UTC 存储 + 北京时间展示
+ * - 分层存储：active / archive / index
+ * - 事件状态：active / completed / cancelled / expired
+ * - 原子写入 + 文件锁
  */
 
 const fs = require('fs');
@@ -18,59 +18,42 @@ const os = require('os');
 // 动态路径配置
 // ============================================================================
 
-/**
- * 获取基础工作目录
- * 优先级：OPENCLAW_WORKSPACE 环境变量 > ~/.openclaw/workspace
- */
 function getBasePath() {
   return process.env.OPENCLAW_WORKSPACE || 
          path.join(os.homedir(), '.openclaw', 'workspace');
 }
 
-/**
- * 获取日历数据目录
- */
 function getDataDir() {
-  // 优先使用 claw-calendar/data，回退到 calendar（兼容旧版）
   const basePath = getBasePath();
-  const newDir = path.join(basePath, 'claw-calendar', 'data');
-  const oldDir = path.join(basePath, 'calendar');
-  
-  // 如果新目录存在，用新的；否则用旧的（兼容）
-  if (fs.existsSync(newDir)) {
-    return newDir;
-  }
-  return oldDir;
+  return path.join(basePath, 'claw-calendar', 'data');
 }
 
-/**
- * 获取文件路径
- */
-function getEventsFile() {
-  return path.join(getDataDir(), 'events.json');
+function getActiveDir() {
+  return path.join(getDataDir(), 'active');
+}
+
+function getArchiveDir(semester = null) {
+  const base = path.join(getDataDir(), 'archive');
+  return semester ? path.join(base, semester) : base;
+}
+
+function getIndexDir() {
+  return path.join(getDataDir(), 'index');
 }
 
 function getSettingsFile() {
   return path.join(getDataDir(), 'settings.json');
 }
 
-function getLockFile() {
-  return path.join(getDataDir(), '.events.lock');
-}
-
-// 缓存路径（避免重复计算）
+// 缓存路径
 const DATA_DIR = getDataDir();
-const EVENTS_FILE = getEventsFile();
-const SETTINGS_FILE = getSettingsFile();
-const LOCK_FILE = getLockFile();
+const ACTIVE_DIR = getActiveDir();
+const INDEX_DIR = getIndexDir();
 
 // ============================================================================
 // 原子写入工具
 // ============================================================================
 
-/**
- * 检查进程是否存在
- */
 function processExists(pid) {
   try {
     process.kill(parseInt(pid), 0);
@@ -80,18 +63,11 @@ function processExists(pid) {
   }
 }
 
-/**
- * 获取文件锁
- * @param {string} lockFile - 锁文件路径
- * @param {number} timeout - 超时时间（毫秒）
- * @returns {boolean} 是否成功获取锁
- */
 function acquireLock(lockFile, timeout = 5000) {
-  const startTime = Date.now();
   const pidFile = lockFile + '.pid';
+  const startTime = Date.now();
   
   while (true) {
-    // 尝试获取锁
     if (!fs.existsSync(pidFile)) {
       try {
         fs.writeFileSync(pidFile, process.pid.toString(), 'utf8');
@@ -100,38 +76,27 @@ function acquireLock(lockFile, timeout = 5000) {
         // 并发冲突，重试
       }
     } else {
-      // 检查锁是否有效
       try {
         const pid = fs.readFileSync(pidFile, 'utf8').trim();
         if (!processExists(pid)) {
-          // 死锁，清理
           try { fs.unlinkSync(pidFile); } catch (e) {}
         }
-      } catch (e) {
-        // 文件不存在或读取失败
-      }
+      } catch (e) {}
     }
     
-    // 检查超时
     if (Date.now() - startTime > timeout) {
       console.error('获取文件锁超时');
       return false;
     }
     
-    // 等待 10ms 后重试
     const waitTime = Math.min(10, timeout - (Date.now() - startTime));
     if (waitTime > 0) {
       const start = Date.now();
-      while (Date.now() - start < waitTime) {
-        // 忙等待
-      }
+      while (Date.now() - start < waitTime) {}
     }
   }
 }
 
-/**
- * 释放文件锁
- */
 function releaseLock(lockFile) {
   const pidFile = lockFile + '.pid';
   try {
@@ -143,51 +108,33 @@ function releaseLock(lockFile) {
   }
 }
 
-/**
- * 原子写入文件
- * @param {string} filePath - 目标文件路径
- * @param {any} data - 要写入的数据（会被 JSON.stringify）
- * @returns {{ success: boolean, error?: string }}
- */
 function atomicWrite(filePath, data) {
   const tmpFile = filePath + '.tmp';
   
   try {
-    // 1. 写入临时文件
     const content = JSON.stringify(data, null, 2);
     fs.writeFileSync(tmpFile, content, 'utf8');
-    
-    // 2. 原子替换（renameSync 是原子的）
     fs.renameSync(tmpFile, filePath);
-    
     return { success: true };
   } catch (error) {
     console.error('原子写入失败:', error.message);
-    
-    // 3. 清理临时文件
     try {
       if (fs.existsSync(tmpFile)) {
         fs.unlinkSync(tmpFile);
       }
     } catch (e) {}
-    
     return { success: false, error: error.message };
   }
 }
 
-/**
- * 带锁的原子写入
- * @param {string} filePath - 目标文件路径
- * @param {Function} transformFn - 转换函数 (data) => newData
- * @returns {{ success: boolean, error?: string }}
- */
 function lockedWrite(filePath, transformFn) {
-  if (!acquireLock(LOCK_FILE)) {
+  const lockFile = filePath + '.lock';
+  
+  if (!acquireLock(lockFile)) {
     return { success: false, error: '无法获取文件锁' };
   }
   
   try {
-    // 1. 读取现有数据
     let data;
     if (fs.existsSync(filePath)) {
       const content = fs.readFileSync(filePath, 'utf8');
@@ -196,170 +143,70 @@ function lockedWrite(filePath, transformFn) {
       data = { version: 1, events: [], metadata: {} };
     }
     
-    // 2. 应用转换
     const newData = transformFn(data);
-    
-    // 3. 原子写入
     return atomicWrite(filePath, newData);
     
   } catch (error) {
     console.error('带锁写入失败:', error.message);
     return { success: false, error: error.message };
   } finally {
-    releaseLock(LOCK_FILE);
+    releaseLock(lockFile);
   }
 }
 
 // ============================================================================
-// 核心函数
+// 时区工具
 // ============================================================================
 
-/**
- * 确保目录存在
- */
-function ensureDir(dir) {
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-}
+const DEFAULT_TIMEZONE = 'Asia/Shanghai';
+const BEIJING_OFFSET = 480; // 分钟
 
 /**
- * 读取事件文件
+ * 将本地时间转换为 UTC
+ * @param {string} date - "YYYY-MM-DD"
+ * @param {string} time - "HH:MM"
+ * @param {string} timezone - 时区
+ * @returns {string} ISO 8601 UTC 时间
  */
-function readEvents() {
-  try {
-    if (!fs.existsSync(EVENTS_FILE)) {
-      return { version: 1, events: [], metadata: {} };
-    }
-    
-    const content = fs.readFileSync(EVENTS_FILE, 'utf8');
-    return JSON.parse(content);
-  } catch (error) {
-    console.error('读取事件文件失败:', error.message);
-    return { version: 1, events: [], metadata: {}, error: error.message };
-  }
-}
-
-/**
- * 写入事件文件（原子写入）
- */
-function writeEvents(data) {
-  ensureDir(DATA_DIR);
-  return atomicWrite(EVENTS_FILE, data);
-}
-
-/**
- * 添加单个事件（带锁）
- */
-function appendEvent(event) {
-  return lockedWrite(EVENTS_FILE, (data) => {
-    if (!data.events) {
-      data.events = [];
-    }
-    
-    // 检查是否已存在
-    const exists = data.events.some(e => e.id === event.id);
-    if (exists) {
-      // 更新现有事件
-      const index = data.events.findIndex(e => e.id === event.id);
-      data.events[index] = {
-        ...data.events[index],
-        ...event,
-        updatedAt: new Date().toISOString()
-      };
-    } else {
-      // 添加新事件
-      event.createdAt = event.createdAt || new Date().toISOString();
-      event.updatedAt = event.updatedAt || new Date().toISOString();
-      data.events.push(event);
-    }
-    
-    data.metadata.updatedAt = new Date().toISOString();
-    return data;
-  });
-}
-
-/**
- * 删除事件（带锁）
- */
-function deleteEvent(eventId) {
-  const result = lockedWrite(EVENTS_FILE, (data) => {
-    if (!data.events) {
-      return data;
-    }
-    
-    const initialLength = data.events.length;
-    data.events = data.events.filter(e => e.id !== eventId);
-    
-    if (data.events.length === initialLength) {
-      throw new Error('未找到事件');
-    }
-    
-    data.metadata.updatedAt = new Date().toISOString();
-    return data;
-  });
+function toUTC(date, time, timezone = DEFAULT_TIMEZONE) {
+  const [year, month, day] = date.split('-').map(Number);
+  const [hours, minutes] = time.split(':').map(Number);
   
-  if (result.success) {
-    return { success: true, deletedId: eventId };
-  }
-  return result;
-}
-
-/**
- * 读取设置文件
- */
-function readSettings() {
-  try {
-    if (!fs.existsSync(SETTINGS_FILE)) {
-      return {
-        timezone: 'Asia/Shanghai',
-        semesterStart: null,
-        notify: {
-          channels: ['current']
-        },
-        reminderDefaults: {
-          high: [1440, 60],
-          medium: [30],
-          low: [10]
-        },
-        quietHours: {
-          start: '23:00',
-          end: '08:00'
-        }
-      };
-    }
-    
-    const content = fs.readFileSync(SETTINGS_FILE, 'utf8');
-    return JSON.parse(content);
-  } catch (error) {
-    console.error('读取设置文件失败:', error.message);
-    return null;
-  }
-}
-
-/**
- * 写入设置文件（原子写入）
- */
-function writeSettings(settings) {
-  ensureDir(DATA_DIR);
-  return atomicWrite(SETTINGS_FILE, settings);
-}
-
-// ============================================================================
-// 新增：智能过滤函数
-// ============================================================================
-
-/**
- * 检查时间是否在静默时段内
- * @param {Date} date - 要检查的时间
- * @param {Object} quietHours - { start: '23:00', end: '08:00' }
- * @returns {boolean} true = 在静默时段
- */
-function isQuietHours(date, quietHours) {
-  if (!quietHours || !quietHours.start || !quietHours.end) {
-    return false;
-  }
+  const local = new Date(Date.UTC(year, month - 1, day, hours, minutes, 0, 0));
   
+  // 北京时间固定偏移 +8
+  const offset = timezone === 'Asia/Shanghai' ? BEIJING_OFFSET : 0;
+  const utc = new Date(local.getTime() - offset * 60 * 1000);
+  
+  return utc.toISOString();
+}
+
+/**
+ * 将 UTC 时间转换为本地时间展示
+ * @param {string} utcString - ISO 8601 UTC 时间
+ * @param {string} targetTimezone - 目标时区
+ * @returns {{ date: string, time: string, timezone: string }}
+ */
+function toLocal(utcString, targetTimezone = DEFAULT_TIMEZONE) {
+  const utc = new Date(utcString);
+  
+  // 转换为北京时间
+  const beijing = new Date(utc.getTime() + BEIJING_OFFSET * 60 * 1000);
+  
+  const date = beijing.toISOString().split('T')[0];
+  const time = beijing.toTimeString().slice(0, 5);
+  
+  return {
+    date,
+    time,
+    timezone: targetTimezone
+  };
+}
+
+/**
+ * 检查是否在静默时段
+ */
+function isQuietHours(date, quietHours = { start: '23:00', end: '08:00' }) {
   const hour = date.getHours();
   const minute = date.getMinutes();
   const time = hour * 60 + minute;
@@ -370,7 +217,6 @@ function isQuietHours(date, quietHours) {
   const startTime = startHour * 60 + startMin;
   const endTime = endHour * 60 + endMin;
   
-  // 处理跨天情况（如 23:00 - 08:00）
   if (startTime > endTime) {
     return time >= startTime || time < endTime;
   }
@@ -378,92 +224,356 @@ function isQuietHours(date, quietHours) {
   return time >= startTime && time < endTime;
 }
 
+// ============================================================================
+// 核心函数 - 活跃层
+// ============================================================================
+
+function ensureActiveDir() {
+  if (!fs.existsSync(ACTIVE_DIR)) {
+    fs.mkdirSync(ACTIVE_DIR, { recursive: true });
+  }
+}
+
+function getCoursesFile() {
+  return path.join(ACTIVE_DIR, 'courses.json');
+}
+
+function getRecurringFile() {
+  return path.join(ACTIVE_DIR, 'recurring.json');
+}
+
+function getPlansFile() {
+  return path.join(ACTIVE_DIR, 'plans.json');
+}
+
+function getMetadataFile() {
+  return path.join(ACTIVE_DIR, 'metadata.json');
+}
+
 /**
- * 获取即将发生的事件（用于提醒）
- * 
- * @param {number} advanceMinutes - 提前多少分钟（默认 30）
- * @returns {Array} 需要提醒的事件数组
+ * 读取课程表
+ */
+function readCourses() {
+  const file = getCoursesFile();
+  if (!fs.existsSync(file)) {
+    return {
+      version: 1,
+      semester: 'unknown',
+      courses: [],
+      metadata: {}
+    };
+  }
+  
+  const content = fs.readFileSync(file, 'utf8');
+  return JSON.parse(content);
+}
+
+/**
+ * 写入课程表（原子写入）
+ */
+function writeCourses(data) {
+  ensureActiveDir();
+  return atomicWrite(getCoursesFile(), data);
+}
+
+/**
+ * 读取周期事件
+ */
+function readRecurring() {
+  const file = getRecurringFile();
+  if (!fs.existsSync(file)) {
+    return {
+      version: 1,
+      recurring: [],
+      metadata: {}
+    };
+  }
+  
+  const content = fs.readFileSync(file, 'utf8');
+  return JSON.parse(content);
+}
+
+/**
+ * 写入周期事件
+ */
+function writeRecurring(data) {
+  ensureActiveDir();
+  return atomicWrite(getRecurringFile(), data);
+}
+
+/**
+ * 读取临时事件
+ */
+function readPlans() {
+  const file = getPlansFile();
+  if (!fs.existsSync(file)) {
+    return {
+      version: 1,
+      plans: [],
+      metadata: {}
+    };
+  }
+  
+  const content = fs.readFileSync(file, 'utf8');
+  return JSON.parse(content);
+}
+
+/**
+ * 写入临时事件（带锁）
+ */
+function writePlans(data) {
+  ensureActiveDir();
+  return lockedWrite(getPlansFile(), () => data);
+}
+
+/**
+ * 添加单个事件
+ */
+function appendPlan(plan) {
+  return lockedWrite(getPlansFile(), (data) => {
+    if (!data.plans) {
+      data.plans = [];
+    }
+    
+    const exists = data.plans.some(p => p.id === plan.id);
+    if (exists) {
+      const index = data.plans.findIndex(p => p.id === plan.id);
+      data.plans[index] = {
+        ...data.plans[index],
+        ...plan,
+        updatedAt: new Date().toISOString()
+      };
+    } else {
+      plan.createdAt = plan.createdAt || new Date().toISOString();
+      plan.updatedAt = plan.updatedAt || new Date().toISOString();
+      data.plans.push(plan);
+    }
+    
+    data.metadata.updatedAt = new Date().toISOString();
+    return data;
+  });
+}
+
+/**
+ * 删除事件
+ */
+function deletePlan(planId) {
+  return lockedWrite(getPlansFile(), (data) => {
+    if (!data.plans) {
+      return data;
+    }
+    
+    const initialLength = data.plans.length;
+    data.plans = data.plans.filter(p => p.id !== planId);
+    
+    if (data.plans.length === initialLength) {
+      throw new Error('未找到事件');
+    }
+    
+    data.metadata.updatedAt = new Date().toISOString();
+    return data;
+  });
+}
+
+/**
+ * 读取学期元数据
+ */
+function readMetadata() {
+  const file = getMetadataFile();
+  if (!fs.existsSync(file)) {
+    return {
+      version: 1,
+      semester: 'unknown',
+      startDate: null,
+      endDate: null,
+      currentWeek: 1,
+      weekMapping: {},
+      keyDates: {},
+      stats: {},
+      createdAt: new Date().toISOString()
+    };
+  }
+  
+  const content = fs.readFileSync(file, 'utf8');
+  return JSON.parse(content);
+}
+
+/**
+ * 写入学期元数据
+ */
+function writeMetadata(data) {
+  ensureActiveDir();
+  return atomicWrite(getMetadataFile(), data);
+}
+
+// ============================================================================
+// 核心函数 - 索引层
+// ============================================================================
+
+function getTodayIndexFile() {
+  return path.join(INDEX_DIR, 'today.json');
+}
+
+function getUpcomingIndexFile() {
+  return path.join(INDEX_DIR, 'upcoming.json');
+}
+
+/**
+ * 读取今天索引
+ */
+function readTodayIndex() {
+  const file = getTodayIndexFile();
+  if (!fs.existsSync(file)) {
+    return null;
+  }
+  
+  const content = fs.readFileSync(file, 'utf8');
+  return JSON.parse(content);
+}
+
+/**
+ * 写入今天索引
+ */
+function writeTodayIndex(data) {
+  if (!fs.existsSync(INDEX_DIR)) {
+    fs.mkdirSync(INDEX_DIR, { recursive: true });
+  }
+  return atomicWrite(getTodayIndexFile(), data);
+}
+
+/**
+ * 读取未来 7 天索引
+ */
+function readUpcomingIndex() {
+  const file = getUpcomingIndexFile();
+  if (!fs.existsSync(file)) {
+    return null;
+  }
+  
+  const content = fs.readFileSync(file, 'utf8');
+  return JSON.parse(content);
+}
+
+/**
+ * 写入未来 7 天索引
+ */
+function writeUpcomingIndex(data) {
+  if (!fs.existsSync(INDEX_DIR)) {
+    fs.mkdirSync(INDEX_DIR, { recursive: true });
+  }
+  return atomicWrite(getUpcomingIndexFile(), data);
+}
+
+// ============================================================================
+// 智能过滤函数（用于提醒）
+// ============================================================================
+
+/**
+ * 获取即将发生的事件
+ * @param {number} advanceMinutes - 提前多少分钟
+ * @returns {Array} 需要提醒的事件
  */
 function get_upcoming_reminders(advanceMinutes = 30) {
-  const eventsData = readEvents();
-  const settings = readSettings();
+  const plansData = readPlans();
+  const metadata = readMetadata();
   const now = new Date();
   
-  if (!eventsData.events || eventsData.events.length === 0) {
+  if (!plansData.plans || plansData.plans.length === 0) {
     return [];
   }
   
   const upcoming = [];
+  const beijingNow = new Date(now.getTime() + BEIJING_OFFSET * 60 * 1000);
   
-  for (const event of eventsData.events) {
-    // 跳过已完成、已取消、已归档的事件
-    if (event.lifecycle && event.lifecycle.status !== 'active') {
-      continue;
-    }
-    if (event.completed || event.cancelled) {
+  for (const plan of plansData.plans) {
+    // 跳过已完成、已取消、已过期的事件
+    if (plan.lifecycle && plan.lifecycle.status !== 'active') {
       continue;
     }
     
     // 计算事件时间
-    let eventTime;
-    if (event.schedule.kind === 'once' && event.schedule.date) {
-      // 一次性事件
-      eventTime = new Date(`${event.schedule.date}T${event.schedule.startTime}:00+08:00`);
-    } else if (event.schedule.kind === 'weekly' && event.schedule.weekday) {
-      // 每周重复事件（计算本周的日期）
-      const currentWeekday = now.getDay();
-      const targetWeekday = event.schedule.weekday;
-      const daysToAdd = (targetWeekday - currentWeekday + 7) % 7;
-      const eventDate = new Date(now);
-      eventDate.setDate(now.getDate() + daysToAdd);
-      eventDate.setHours(0, 0, 0, 0);
-      
-      const [hours, minutes] = event.schedule.startTime.split(':').map(Number);
-      eventTime = new Date(eventDate);
-      eventTime.setHours(hours, minutes, 0, 0);
-      
-      // 如果时间已过，加 7 天到下周
-      if (eventTime.getTime() < now.getTime()) {
-        eventTime.setDate(eventTime.getDate() + 7);
-      }
-    } else {
-      // 无法识别的事件类型
-      continue;
-    }
+    const eventDate = plan.schedule.displayDate;
+    const eventTime = plan.schedule.displayTime || '00:00';
+    const eventTimezone = plan.schedule.displayTimezone || DEFAULT_TIMEZONE;
+    
+    // 转换为 UTC 进行比较
+    const utcStart = plan.schedule.utcStart || toUTC(eventDate, eventTime, eventTimezone);
+    const eventUTC = new Date(utcStart);
     
     // 计算提醒时间
-    const reminderOffsets = event.reminderOffsets || [30];
+    const reminderOffsets = plan.reminderOffsets || [30];
     const primaryOffset = reminderOffsets[0] || 30;
-    const reminderTime = new Date(eventTime.getTime() - primaryOffset * 60 * 1000);
+    const reminderTime = new Date(eventUTC.getTime() - primaryOffset * 60 * 1000);
     
     // 检查是否在提醒时间窗口内（±1 分钟）
     const timeDiff = now.getTime() - reminderTime.getTime();
     if (timeDiff < -60 * 1000 || timeDiff > 60 * 1000) {
-      // 不在提醒窗口内
       continue;
     }
     
     // 检查静默时段
+    const settings = readSettings();
     const quietHours = settings.quietHours || { start: '23:00', end: '08:00' };
-    const inQuietHours = isQuietHours(now, quietHours);
+    const inQuietHours = isQuietHours(beijingNow, quietHours);
     
     if (inQuietHours) {
       // 静默时段只推送高优先级事件
-      if (event.priority !== 'high') {
+      if (plan.priority !== 'high') {
         continue;
       }
     }
     
     // 通过所有检查，添加到结果
+    const local = toLocal(utcStart, eventTimezone);
     upcoming.push({
-      ...event,
-      reminderTime: reminderTime.toISOString(),
-      eventTime: eventTime.toISOString(),
-      minutesUntilEvent: Math.round((eventTime.getTime() - now.getTime()) / 60000)
+      ...plan,
+      display: {
+        date: local.date,
+        time: local.time,
+        timezone: eventTimezone
+      },
+      minutesUntilEvent: Math.round((eventUTC.getTime() - now.getTime()) / 60000)
     });
   }
   
   return upcoming;
+}
+
+// ============================================================================
+// 设置文件
+// ============================================================================
+
+function readSettings() {
+  const file = getSettingsFile();
+  if (!fs.existsSync(file)) {
+    return {
+      timezone: 'Asia/Shanghai',
+      semesterStart: null,
+      notify: {
+        channels: ['current']
+      },
+      reminderDefaults: {
+        high: [1440, 60],
+        medium: [30],
+        low: [10]
+      },
+      quietHours: {
+        start: '23:00',
+        end: '08:00'
+      }
+    };
+  }
+  
+  const content = fs.readFileSync(file, 'utf8');
+  return JSON.parse(content);
+}
+
+function writeSettings(settings) {
+  const dir = path.dirname(getSettingsFile());
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  return atomicWrite(getSettingsFile(), settings);
 }
 
 // ============================================================================
@@ -472,32 +582,39 @@ function get_upcoming_reminders(advanceMinutes = 30) {
 
 module.exports = {
   // 核心函数
-  readEvents,
-  writeEvents,
-  appendEvent,
-  deleteEvent,
-  readSettings,
-  writeSettings,
+  readCourses,
+  writeCourses,
+  readRecurring,
+  writeRecurring,
+  readPlans,
+  writePlans,
+  appendPlan,
+  deletePlan,
+  readMetadata,
+  writeMetadata,
   
-  // 新增：智能过滤
+  // 索引
+  readTodayIndex,
+  writeTodayIndex,
+  readUpcomingIndex,
+  writeUpcomingIndex,
+  
+  // 智能过滤
   get_upcoming_reminders,
   isQuietHours,
   
-  // 工具函数
-  atomicWrite,
-  lockedWrite,
-  acquireLock,
-  releaseLock,
+  // 时区工具
+  toUTC,
+  toLocal,
   
-  // 路径（导出供测试使用）
+  // 设置
+  readSettings,
+  writeSettings,
+  
+  // 路径工具
   getBasePath,
   getDataDir,
-  getEventsFile,
-  getSettingsFile,
-  getLockFile,
-  
-  // 常量（兼容旧版）
-  EVENTS_FILE,
-  SETTINGS_FILE,
-  DATA_DIR
+  getActiveDir,
+  getArchiveDir,
+  getIndexDir
 };

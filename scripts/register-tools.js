@@ -20,25 +20,123 @@ const TOOLS_DIR = path.join(__dirname, '..', 'skill', 'tools');
 const TOOLS_TO_REGISTER = [
   // 文件操作工具
   {
-    name: 'calendar_read_events',
-    description: '读取所有日历事件',
+    name: 'calendar_read_courses',
+    description: '读取本学期课程表',
     params: [],
     module: 'file-ops',
-    function: 'readEvents'
+    function: 'readCourses'
   },
   {
-    name: 'calendar_append_event',
-    description: '添加单个事件到日历',
-    params: [{ name: 'event', description: '事件对象', required: true }],
+    name: 'calendar_write_courses',
+    description: '写入课程表（原子写入）',
+    params: [{ name: 'data', description: '课程表对象', required: true }],
     module: 'file-ops',
-    function: 'appendEvent'
+    function: 'writeCourses'
   },
   {
-    name: 'calendar_delete_event',
+    name: 'calendar_read_recurring',
+    description: '读取周期事件',
+    params: [],
+    module: 'file-ops',
+    function: 'readRecurring'
+  },
+  {
+    name: 'calendar_write_recurring',
+    description: '写入周期事件',
+    params: [{ name: 'data', description: '周期事件对象', required: true }],
+    module: 'file-ops',
+    function: 'writeRecurring'
+  },
+  {
+    name: 'calendar_read_plans',
+    description: '读取临时事件',
+    params: [],
+    module: 'file-ops',
+    function: 'readPlans'
+  },
+  {
+    name: 'calendar_write_plans',
+    description: '写入临时事件（带锁）',
+    params: [{ name: 'data', description: '临时事件对象', required: true }],
+    module: 'file-ops',
+    function: 'writePlans'
+  },
+  {
+    name: 'calendar_append_plan',
+    description: '添加单个事件到临时事件列表',
+    params: [{ name: 'plan', description: '事件对象', required: true }],
+    module: 'file-ops',
+    function: 'appendPlan'
+  },
+  {
+    name: 'calendar_delete_plan',
     description: '删除指定事件',
-    params: [{ name: 'eventId', description: '事件 ID', required: true }],
+    params: [{ name: 'planId', description: '事件 ID', required: true }],
     module: 'file-ops',
-    function: 'deleteEvent'
+    function: 'deletePlan'
+  },
+  {
+    name: 'calendar_read_metadata',
+    description: '读取学期元数据',
+    params: [],
+    module: 'file-ops',
+    function: 'readMetadata'
+  },
+  {
+    name: 'calendar_write_metadata',
+    description: '写入学期元数据',
+    params: [{ name: 'data', description: '元数据对象', required: true }],
+    module: 'file-ops',
+    function: 'writeMetadata'
+  },
+  {
+    name: 'calendar_read_today_index',
+    description: '读取今天索引（预计算视图）',
+    params: [],
+    module: 'file-ops',
+    function: 'readTodayIndex'
+  },
+  {
+    name: 'calendar_read_upcoming_index',
+    description: '读取未来 7 天索引',
+    params: [],
+    module: 'file-ops',
+    function: 'readUpcomingIndex'
+  },
+  {
+    name: 'calendar_get_reminders',
+    description: '获取即将发生的事件（智能过滤，用于提醒）',
+    params: [{ name: 'advanceMinutes', description: '提前多少分钟，默认 30', required: false }],
+    module: 'file-ops',
+    function: 'get_upcoming_reminders'
+  },
+  {
+    name: 'calendar_is_quiet_hours',
+    description: '检查当前是否在静默时段（23:00-08:00）',
+    params: [{ name: 'date', description: '要检查的时间，默认现在', required: false }],
+    module: 'file-ops',
+    function: 'isQuietHours'
+  },
+  {
+    name: 'calendar_to_utc',
+    description: '将本地时间转换为 UTC（时区协调）',
+    params: [
+      { name: 'date', description: '日期 YYYY-MM-DD', required: true },
+      { name: 'time', description: '时间 HH:MM', required: true },
+      { name: 'timezone', description: '时区，默认 Asia/Shanghai', required: false }
+    ],
+    module: 'file-ops',
+    function: 'toUTC'
+  },
+  {
+    name: 'calendar_to_local',
+    description: '将 UTC 转换为本地时间展示',
+    params: [
+      { name: 'utcString', description: 'ISO 8601 UTC 时间', required: true },
+      { name: 'targetTimezone', description: '目标时区，默认 Asia/Shanghai', required: false }
+    ],
+    module: 'file-ops',
+    function: 'toLocal'
   },
   {
     name: 'calendar_read_settings',
@@ -54,19 +152,65 @@ const TOOLS_TO_REGISTER = [
     module: 'file-ops',
     function: 'writeSettings'
   },
+  
+  // 归档工具
   {
-    name: 'calendar_get_reminders',
-    description: '获取即将发生的事件（智能过滤，用于提醒）',
-    params: [{ name: 'advanceMinutes', description: '提前多少分钟，默认 30', required: false }],
-    module: 'file-ops',
-    function: 'get_upcoming_reminders'
+    name: 'calendar_generate_weekly_report',
+    description: '生成周总结',
+    params: [{ name: 'weekNumber', description: '周次', required: true }],
+    module: 'archive-ops',
+    function: 'generateWeeklyReport'
   },
   {
-    name: 'calendar_is_quiet_hours',
-    description: '检查当前是否在静默时段（23:00-08:00）',
-    params: [{ name: 'date', description: '要检查的时间，默认现在', required: false }],
-    module: 'file-ops',
-    function: 'isQuietHours'
+    name: 'calendar_archive_last_week_plans',
+    description: '归档上周计划',
+    params: [],
+    module: 'archive-ops',
+    function: 'archiveLastWeekPlans'
+  },
+  {
+    name: 'calendar_archive_semester',
+    description: '学期末归档',
+    params: [{ name: 'semesterName', description: '学期名称，可选', required: false }],
+    module: 'archive-ops',
+    function: 'archiveSemester'
+  },
+  {
+    name: 'calendar_generate_semester_summary',
+    description: '生成学期总结',
+    params: [{ name: 'semester', description: '学期名称', required: true }],
+    module: 'archive-ops',
+    function: 'generateSemesterSummary'
+  },
+  
+  // 索引重建工具
+  {
+    name: 'calendar_build_today_index',
+    description: '重建今天索引',
+    params: [],
+    module: 'rebuild-index',
+    function: 'buildTodayIndex'
+  },
+  {
+    name: 'calendar_build_upcoming_index',
+    description: '重建未来 7 天索引',
+    params: [{ name: 'days', description: '天数，默认 7', required: false }],
+    module: 'rebuild-index',
+    function: 'buildUpcomingIndex'
+  },
+  {
+    name: 'calendar_cleanup_expired_plans',
+    description: '清理过期事件',
+    params: [],
+    module: 'rebuild-index',
+    function: 'cleanupExpiredPlans'
+  },
+  {
+    name: 'calendar_update_course_week',
+    description: '更新课程周次',
+    params: [],
+    module: 'rebuild-index',
+    function: 'updateCourseWeek'
   },
   
   // 日期计算工具
