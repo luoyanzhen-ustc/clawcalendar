@@ -202,13 +202,13 @@ function pushToWeChatUsers(event, callMessage) {
   const messageText = formatReminderMessage(event);
   
   for (const userId of users) {
-    const target = `wechat:${userId}`;
+    // 微信直接使用 userId，不需要前缀
     
     try {
       const result = callMessage({
         action: 'send',
-        channel: 'wechat',
-        target: target,
+        channel: 'openclaw-weixin',
+        target: userId,  // 微信直接使用 userId
         message: messageText
       });
       
