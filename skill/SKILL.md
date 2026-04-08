@@ -39,64 +39,97 @@ description: "智能日历助手。当用户上传课表图片、询问日程（
 
 ---
 
-## 可用工具（内联脚本）
+## 🛠️ 可用工具（OpenClaw 原生工具）
 
-所有工具函数都封装在 `tools/` 目录中，你可以直接 require 调用：
+本 Skill 已注册以下 OpenClaw 原生工具，**直接使用工具名称调用**，无需 `require()`：
 
-### 文件操作工具 (`tools/file-ops.js`)
+### 核心工具
 
-```javascript
-const path = require('path');
-const toolsDir = __dirname.replace('/skill', '/tools');
-const { readEvents, writeEvents, appendEvent, deleteEvent, readSettings, writeSettings } = 
-  require(path.join(toolsDir, 'file-ops.js'));
+| 工具名称 | 功能 | 参数 | 返回 |
+|----------|------|------|------|
+| `calendar_get_reminders` | 获取即将发生的事件（智能过滤） | `advanceMinutes` (可选，默认 30) | 事件数组 `[]` 或 `[{...}]` |
+| `calendar_read_events` | 读取所有事件 | 无 | `{ version, events, metadata }` |
+| `calendar_append_event` | 添加单个事件 | `event` (事件对象) | `{ success, event }` |
+| `calendar_delete_event` | 删除事件 | `eventId` | `{ success, deletedId }` |
+| `calendar_read_settings` | 读取用户设置 | 无 | 设置对象 |
+| `calendar_write_settings` | 写入用户设置 | `settings` | `{ success }` |
+| `calendar_is_quiet_hours` | 检查是否在静默时段 | `date` (可选) | `true/false` |
 
-// 使用示例
-const eventsData = readEvents();
-const events = eventsData.events || [];
+### 辅助工具
 
-appendEvent({
-  id: 'evt-123',
-  title: '去图书馆',
-  // ...
-});
+| 工具名称 | 功能 |
+|----------|------|
+| `calendar_get_current_week` | 计算当前周次（相对于学期开始） |
+| `calendar_parse_relative_time` | 解析"明天下午 3 点" → Date 对象 |
+| `calendar_format_date` | 格式化日期为 YYYY-MM-DD |
+| `calendar_format_time` | 格式化时间为 HH:MM |
+| `calendar_get_weekday_name` | 获取"周一"、"周二"等 |
+| `calendar_parse_schedule_image` | 识别课表图片（需传入图片路径） |
+| `calendar_courses_to_events` | 将课程列表转换为事件数组 |
+
+---
+
+### 工具调用示例
+
+#### 示例 1：获取即将发生的事件
+
+```
+调用 calendar_get_reminders(30)
+
+返回：
+[]  ← 没有需要提醒的事件
+
+或
+
+[
+  {
+    "title": "和朋友吃饭",
+    "schedule": { "startTime": "19:00", "date": "2026-04-08" },
+    "location": "餐厅",
+    "minutesUntilEvent": 10
+  }
+]
 ```
 
-### 日期计算工具 (`tools/date-math.js`)
+#### 示例 2：读取所有事件
 
-```javascript
-const path = require('path');
-const toolsDir = __dirname.replace('/skill', '/tools');
-const { getCurrentWeek, parseRelativeTime, formatDate, formatTime, getWeekdayName, isWithinWeekRanges } = 
-  require(path.join(toolsDir, 'date-math.js'));
-
-// 使用示例
-const now = new Date();
-const date = parseRelativeTime('明天下午 3 点', now);
-const weekNum = getCurrentWeek('2026-03-01');
 ```
+调用 calendar_read_events()
 
-### OCR 工具 (`tools/ocr-wrapper.js`)
-
-```javascript
-const path = require('path');
-const toolsDir = __dirname.replace('/skill', '/tools');
-const { parseScheduleImage, coursesToEvents } = 
-  require(path.join(toolsDir, 'ocr-wrapper.js'));
-
-// 使用示例（需要传入 call_model 函数）
-async function ocr(imagePath) {
-  const result = await parseScheduleImage(imagePath, callModel);
-  return result;
+返回：
+{
+  "version": 1,
+  "events": [...],
+  "metadata": { ... }
 }
 ```
 
+#### 示例 3：添加事件
+
+```
+调用 calendar_append_event({
+  "id": "evt-123",
+  "title": "去图书馆",
+  "schedule": {
+    "kind": "once",
+    "date": "2026-04-09",
+    "startTime": "19:00"
+  },
+  "priority": "medium"
+})
+
+返回：
+{ "success": true, "event": { ... } }
+```
+
+---
+
 ### 工具调用原则
 
-1. **优先使用内联脚本** - 所有工具都在 `tools/` 目录中
-2. **不要硬编码路径** - 使用 `__dirname` 动态计算
-3. **错误处理** - 工具调用失败时友好提示用户
-4. **数据验证** - 写入前验证数据格式
+1. **直接使用工具名称** - 如 `calendar_get_reminders`，无需 `require()`
+2. **优先使用智能过滤** - 用 `calendar_get_reminders` 而非自己遍历
+3. **空数组时静默** - 没有事件时不要打扰用户
+4. **错误处理** - 工具调用失败时友好提示用户
 
 ---
 
@@ -297,7 +330,7 @@ async function ocr(imagePath) {
 
 ### ⚠️ 重要：性能优化
 
-**不要**自己遍历所有事件！使用 `get_upcoming_reminders()` 工具函数。
+**不要**自己遍历所有事件！使用 **`calendar_get_reminders`** 工具。
 
 **原因**：
 - ✅ JS 层过滤比 LLM 遍历快 100 倍
@@ -311,15 +344,10 @@ async function ocr(imagePath) {
 
 当 OpenClaw cron 触发 "检查日历提醒" 时：
 
-#### 第一步：调用过滤工具
+#### 第一步：调用工具
 
-```javascript
-const path = require('path');
-const toolsDir = __dirname.replace('/skill', '/tools');
-const { get_upcoming_reminders } = require(path.join(toolsDir, 'file-ops.js'));
-
-// 获取 30 分钟内需要提醒的事件
-const upcoming = get_upcoming_reminders(30);
+```
+调用 calendar_get_reminders(30)
 ```
 
 #### 第二步：分支处理
@@ -337,46 +365,12 @@ const upcoming = get_upcoming_reminders(30);
 
 ---
 
-### 示例代码
-
-```javascript
-const upcoming = get_upcoming_reminders(30);
-
-if (upcoming.length === 0) {
-  // 静默结束，不生成任何消息
-  return;
-}
-
-// 生成提醒消息
-for (const event of upcoming) {
-  const minutes = event.minutesUntilEvent;
-  const title = event.title;
-  const location = event.location || '';
-  const time = event.schedule.startTime;
-  
-  // 生成自然语言提醒
-  let message = `⏰ ${time} ${title}`;
-  if (location) {
-    message += `（${location}）`;
-  }
-  if (minutes > 0) {
-    message += `，还有 ${minutes} 分钟～`;
-  }
-  
-  // 推送给用户
-  sendMessage(message);
-}
-```
-
----
-
 ### 示例提醒文案
 
 ✅ **好**（温暖、简洁、自然）：
 - "⏰ 19:00 和朋友吃饭（餐厅），还有 10 分钟～"
 - "📚 20:00 机器学习系统在 G2-B403，准备上课啦"
 - "🌧️ 15:00 有课，外面下雨记得带伞"
-- "⏰ 新时代中国特色社会主义理论与实践，10 分钟后在 G3-115"
 
 ❌ **坏**（生硬、机械、啰嗦）：
 - "事件提醒：和朋友吃饭，时间 19:00，地点餐厅"（太生硬）
@@ -388,17 +382,17 @@ for (const event of upcoming) {
 
 ### 注意事项
 
-1. **不要调用 `read_events()`** - 已经由 `get_upcoming_reminders()` 过滤
-2. **不要自己遍历判断** - JS 层已处理所有逻辑
-3. **静默时段检查** - `get_upcoming_reminders()` 已处理
+1. **调用 `calendar_get_reminders`** - 已过滤好的事件数组
+2. **不要调用 `calendar_read_events`** - 避免遍历所有事件
+3. **静默时段检查** - `calendar_get_reminders` 已处理
 4. **只推送一次** - 避免重复提醒
 5. **空数组时静默** - 不要生成"没有提醒"之类的消息
 
 ---
 
-### 工具函数说明
+### 工具说明
 
-**`get_upcoming_reminders(advanceMinutes)`**
+**`calendar_get_reminders(advanceMinutes)`**
 
 参数：
 - `advanceMinutes`（可选）：提前多少分钟，默认 30

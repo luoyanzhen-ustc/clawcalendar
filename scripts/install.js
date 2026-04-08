@@ -167,6 +167,23 @@ function restartGateway() {
 }
 
 /**
+ * 注册工具
+ */
+function registerTools() {
+  console.log(`🔧 步骤 X: 注册 OpenClaw 工具`);
+  
+  try {
+    const registerScript = path.join(WORKSPACE_DIR, 'claw-calendar', 'scripts', 'register-tools.js');
+    exec(`node "${registerScript}"`, { ignoreError: true });
+    console.log(`✅ 工具注册成功`);
+  } catch (error) {
+    console.log(`⚠️  工具注册失败：${error.message}`);
+    console.log(`   请手动执行：`);
+    console.log(`   node /root/.openclaw/workspace/claw-calendar/scripts/register-tools.js`);
+  }
+}
+
+/**
  * 主函数
  */
 function main() {
@@ -181,16 +198,20 @@ function main() {
   console.log('\n🚫 步骤 2: 禁用旧版 Skill');
   disableOldSkill();
   
-  // 3. 创建数据目录
-  console.log('\n📂 步骤 3: 创建数据目录');
+  // 3. 注册工具
+  console.log('\n🔧 步骤 3: 注册 OpenClaw 工具');
+  registerTools();
+  
+  // 4. 创建数据目录
+  console.log('\n📂 步骤 4: 创建数据目录');
   createDataDir();
   
-  // 4. 创建 cron 任务
-  console.log('\n⏰ 步骤 4: 创建定时任务');
+  // 5. 创建 cron 任务
+  console.log('\n⏰ 步骤 5: 创建定时任务');
   createCronJob();
   
-  // 5. 重启 Gateway
-  console.log('\n🔄 步骤 5: 重启 Gateway');
+  // 6. 重启 Gateway
+  console.log('\n🔄 步骤 6: 重启 Gateway');
   console.log('\n⚠️  注意：重启 Gateway 会中断当前会话');
   console.log('   是否继续？(y/N)');
   
