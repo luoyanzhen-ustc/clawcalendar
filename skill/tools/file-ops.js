@@ -346,6 +346,16 @@ function appendPlan(plan) {
     } else {
       plan.createdAt = plan.createdAt || new Date().toISOString();
       plan.updatedAt = plan.updatedAt || new Date().toISOString();
+      
+      // 初始化 notify 字段（用于推送去重）
+      if (!plan.notify) {
+        plan.notify = {
+          lastPushedAt: null,
+          pushedChannels: [],
+          nextPushTime: null
+        };
+      }
+      
       data.plans.push(plan);
     }
     
@@ -635,7 +645,17 @@ function readSettings() {
       timezone: 'Asia/Shanghai',
       semesterStart: null,
       notify: {
-        channels: ['current']
+        enabled: true,
+        channels: {
+          webchat: true,
+          qq: true,
+          wechat: false
+        },
+        timing: {
+          advanceMinutes: 30,
+          maxReminders: 3,
+          intervalMinutes: 10
+        }
       },
       reminderDefaults: {
         high: [1440, 60],

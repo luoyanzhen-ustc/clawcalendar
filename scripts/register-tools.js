@@ -223,6 +223,25 @@ const TOOLS_TO_REGISTER = [
     function: 'updateCourseWeek'
   },
   
+  // 推送工具
+  {
+    name: 'calendar_push_reminders',
+    description: '推送即将发生的事件到配置的渠道（QQ/微信/Web）',
+    params: [
+      { name: 'advanceMinutes', description: '提前多少分钟，默认 30', required: false },
+      { name: 'channels', description: '推送渠道数组，默认所有开启的渠道', required: false }
+    ],
+    module: 'push-reminders',
+    function: 'pushReminders'
+  },
+  {
+    name: 'calendar_test_push',
+    description: '测试推送功能（仅用于调试）',
+    params: [],
+    module: 'push-reminders',
+    function: 'testPush'
+  },
+  
   // 日期计算工具
   {
     name: 'calendar_get_current_week',
