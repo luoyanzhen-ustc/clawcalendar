@@ -54,13 +54,30 @@ function createCronJob(name, schedule, payload, options = {}) {
     deliveryMode = 'announce'
   } = options;
   
-  // 构建命令
-  const scheduleJson = JSON.stringify(schedule);
-  const payloadJson = JSON.stringify(payload);
+  let cmd = `openclaw cron add --name '${name}'`;
   
-  const cmd = `openclaw cron add --schedule '${scheduleJson}' --name '${name}' --payload '${payloadJson}'`;
+  // 根据 schedule 类型构建命令
+  if (schedule.kind === 'at') {
+    cmd += ` --at '${schedule.at}'`;
+  } else if (schedule.kind === 'cron') {
+    cmd += ` --cron '${schedule.expr}'`;
+  } else if (schedule.kind === 'every') {
+    cmd += ` --every '${schedule.everyMs}ms'`;
+  }
+  
+  // 添加 payload（使用 --message）
+  const messageJson = JSON.stringify(payload);
+  cmd += ` --message '${messageJson}'`;
+  
+  // 添加其他选项
+  if (deleteAfterRun) {
+    cmd += ' --delete-after-run';
+  }
+  
+  cmd += ' --json';
   
   console.log(`创建 Cron 任务：${name}`);
+  console.log(`命令：${cmd}`);
   const result = exec(cmd);
   
   if (result.success) {
@@ -74,6 +91,7 @@ function createCronJob(name, schedule, payload, options = {}) {
         rawData: jobData
       };
     } catch (error) {
+      console.log('解析结果:', result.output);
       return { success: true, message: 'Cron 任务创建成功', output: result.output };
     }
   } else {

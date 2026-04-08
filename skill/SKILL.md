@@ -42,41 +42,43 @@ description: "智能日历助手（纯 Cron 驱动架构）。当用户上传课
 
 ---
 
-## 🛠️ 可用工具（OpenClaw 原生工具）
+## 🛠️ 可用工具
 
-本 Skill 已注册以下 OpenClaw 原生工具，**直接使用工具名称调用**，无需 `require()`：
+本 Skill 提供以下工具，**直接在对话中调用**（无需代码）：
 
 ### 核心工具
 
-| 工具名称 | 功能 | 参数 | 返回 |
-|----------|------|------|------|
-| `calendar_append_plan` | 创建事件（自动创建 Cron 任务） | `plan` (事件对象) | `{ success, event, createdCrons }` |
-| `calendar_update_plan` | 更新事件（自动更新 Cron 任务） | `planId`, `updates` | `{ success, event }` |
-| `calendar_delete_plan` | 删除事件（自动删除 Cron 任务） | `planId` | `{ success, deletedCrons }` |
-| `calendar_cancel_plan` | 取消事件（软删除） | `planId`, `reason` | `{ success, event }` |
-| `calendar_get_plan` | 查询单个事件 | `planId` | 事件对象或 `null` |
-| `calendar_list_plans` | 列出所有事件 | 无 | 事件数组 `[]` |
+| 工具名称 | 功能 |
+|----------|------|
+| `calendar_append_plan` | 创建事件（自动创建 Cron 任务） |
+| `calendar_update_plan` | 更新事件（自动更新 Cron 任务） |
+| `calendar_delete_plan` | 删除事件（自动删除 Cron 任务） |
+| `calendar_cancel_plan` | 取消事件（软删除） |
+| `calendar_get_plan` | 查询单个事件 |
+| `calendar_list_plans` | 列出所有事件 |
 
 ### 提醒管理工具
 
-| 工具名称 | 功能 | 参数 | 返回 |
-|----------|------|------|------|
-| `calendar_push_reminder` | 推送单个阶段的提醒 | `planId`, `stageId` | `{ success, pushed, channels }` |
-| `calendar_create_reminder_cron` | 为事件阶段创建 Cron 任务 | `planId`, `stageId`, `eventTime`, `offset` | `{ success, cronJobId, triggerTime }` |
-| `calendar_update_reminder_cron` | 更新事件关联的 Cron 任务 | `planId`, `newEventTime` | `{ success, updatedCount }` |
-| `calendar_delete_reminder_cron` | 删除事件关联的 Cron 任务 | `planId` | `{ success, deletedCount }` |
+| 工具名称 | 功能 |
+|----------|------|
+| `calendar_push_reminder` | 推送单个阶段的提醒 |
+| `calendar_create_reminder_cron` | 为事件阶段创建 Cron 任务 |
+| `calendar_update_reminder_cron` | 更新事件关联的 Cron 任务 |
+| `calendar_delete_reminder_cron` | 删除事件关联的 Cron 任务 |
+| `calendar_list_reminder_crons` | 列出事件的所有 Cron 任务 |
 
 ### 辅助工具
 
 | 工具名称 | 功能 |
 |----------|------|
-| `calendar_get_current_week` | 计算当前周次（相对于学期开始） |
-| `calendar_parse_relative_time` | 解析"明天下午 3 点" → Date 对象 |
-| `calendar_format_date` | 格式化日期为 YYYY-MM-DD |
-| `calendar_format_time` | 格式化时间为 HH:MM |
-| `calendar_get_weekday_name` | 获取"周一"、"周二"等 |
-| `calendar_parse_schedule_image` | 识别课表图片（需传入图片路径） |
-| `calendar_courses_to_events` | 将课程列表转换为事件数组 |
+| `calendar_get_current_week` | 计算当前周次 |
+| `calendar_parse_relative_time` | 解析相对时间 |
+| `calendar_format_date` | 格式化日期 |
+| `calendar_format_time` | 格式化时间 |
+| `calendar_get_weekday_name` | 获取星期名称 |
+| `calendar_parse_schedule_image` | 识别课表图片 |
+| `calendar_courses_to_events` | 课程转事件 |
+| `calendar_test_push` | 测试推送功能 |
 
 ---
 
