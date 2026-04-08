@@ -1,17 +1,97 @@
 #!/usr/bin/env node
 
 /**
- * Cron 任务管理工具 v3.0
+ * Cron 任务管理工具 v4.0
  * 
  * 功能：
- * - 为事件阶段创建 Cron 任务
+ * - 为事件阶段创建 Cron 任务（支持多渠道推送）
  * - 更新事件关联的 Cron 任务
  * - 删除事件关联的 Cron 任务
  * - 查询 Cron 任务状态
+ * 
+ * v4.0 更新：
+ * - 添加 --to 参数支持（关键！）
+ * - 添加 --account 参数支持（微信必需）
+ * - 支持多渠道推送（QQ + 微信）
  */
 
 const { execSync } = require('child_process');
 const path = require('path');
+const fs = require('fs');
+
+// ============================================================================
+// 用户配置
+// ============================================================================
+
+/**
+ * 获取用户渠道配置
+ * 
+ * @returns {Object} 渠道配置
+ */
+function getUserChannelConfig() {
+  // 从 known-users.json 读取用户信息
+  const knownUsersPath = '/root/.openclaw/workspace/claw-calendar/data/known-users.json';
+  
+  try {
+    if (fs.existsSync(knownUsersPath)) {
+      const users = JSON.parse(fs.readFileSync(knownUsersPath, 'utf8'));
+      // 返回第一个用户的配置
+      if (users && users.length > 0) {
+        return users[0];
+      }
+    }
+  } catch (error) {
+    console.error('读取用户配置失败:', error.message);
+  }
+  
+  // 默认配置（从测试中获取）
+  return {
+    name: '小焰',
+    qq: {
+      openid: 'DCBCC0615C886C1EA3DC6718A972DC8E',
+      enabled: true
+    },
+    weixin: {
+      userId: 'o9cq807e4f8sPvVk2dHwLp2E1UiE@im.wechat',
+      accountId: 'fb7d6c109a73-im-bot',
+      enabled: true
+    }
+  };
+}
+
+/**
+ * 获取启用的渠道列表
+ * 
+ * @param {Object} userConfig - 用户配置
+ * @returns {Array} 启用的渠道列表
+ */
+function getEnabledChannels(userConfig) {
+  const channels = [];
+  
+  if (userConfig.qq?.enabled && userConfig.qq?.openid) {
+    channels.push({
+      type: 'qq',
+      channel: 'qqbot',
+      to: `qqbot:c2c:${userConfig.qq.openid}`,
+      account: null  // QQ 不需要 --account
+    });
+  }
+  
+  if (userConfig.weixin?.enabled && userConfig.weixin?.userId) {
+    channels.push({
+      type: 'weixin',
+      channel: 'openclaw-weixin',
+      to: userConfig.weixin.userId,
+      account: userConfig.weixin.accountId  // 微信需要 --account
+    });
+  }
+  
+  return channels;
+}
+
+// ============================================================================
+// Cron 操作
+// ============================================================================
 
 /**
  * 执行 OpenClaw 命令
@@ -45,18 +125,26 @@ function parseCronList(output) {
 }
 
 /**
- * 创建 Cron 任务
+ * 创建 Cron 任务（支持多渠道）
+ * 
+ * @param {string} name - 任务名称
+ * @param {Object} schedule - 调度配置
+ * @param {string} message - 消息内容
+ * @param {Object} channelConfig - 渠道配置
+ * @param {Object} options - 其他选项
+ * @returns {Object} 创建结果
  */
-function createCronJob(name, schedule, payload, options = {}) {
+function createCronJob(name, schedule, message, channelConfig, options = {}) {
   const {
-    sessionTarget = 'isolated',
-    deleteAfterRun = true,
-    deliveryMode = 'announce'
+    deleteAfterRun = true
   } = options;
   
+  const { channel, to, account } = channelConfig;
+  
+  // 构建命令
   let cmd = `openclaw cron add --name '${name}'`;
   
-  // 根据 schedule 类型构建命令
+  // 调度
   if (schedule.kind === 'at') {
     cmd += ` --at '${schedule.at}'`;
   } else if (schedule.kind === 'cron') {
@@ -65,11 +153,19 @@ function createCronJob(name, schedule, payload, options = {}) {
     cmd += ` --every '${schedule.everyMs}ms'`;
   }
   
-  // 添加 payload（使用 --message）
-  const messageJson = JSON.stringify(payload);
-  cmd += ` --message '${messageJson}'`;
+  // Payload（简单消息）
+  cmd += ` --message '${message}'`;
   
-  // 添加其他选项
+  // 渠道配置（关键！）
+  cmd += ` --channel '${channel}'`;
+  cmd += ` --to '${to}'`;
+  
+  // 微信需要 --account
+  if (account) {
+    cmd += ` --account '${account}'`;
+  }
+  
+  // 其他选项
   if (deleteAfterRun) {
     cmd += ' --delete-after-run';
   }
@@ -77,7 +173,7 @@ function createCronJob(name, schedule, payload, options = {}) {
   cmd += ' --json';
   
   console.log(`创建 Cron 任务：${name}`);
-  console.log(`命令：${cmd}`);
+  console.log(`渠道：${channel}, 目标：${to}`);
   const result = exec(cmd);
   
   if (result.success) {
@@ -87,6 +183,8 @@ function createCronJob(name, schedule, payload, options = {}) {
         success: true,
         cronJobId: jobData.id,
         name: jobData.name,
+        channel: channel,
+        to: to,
         nextRunAt: jobData.state?.nextRunAtMs,
         rawData: jobData
       };
@@ -95,6 +193,7 @@ function createCronJob(name, schedule, payload, options = {}) {
       return { success: true, message: 'Cron 任务创建成功', output: result.output };
     }
   } else {
+    console.error('创建失败:', result.error);
     return { success: false, error: result.error, output: result.output };
   }
 }
@@ -136,8 +235,12 @@ function listCalendarCrons() {
   };
 }
 
+// ============================================================================
+// 提醒 Cron 管理
+// ============================================================================
+
 /**
- * 为事件阶段创建 Cron 任务
+ * 为事件阶段创建 Cron 任务（多渠道）
  * 
  * @param {Object} options - 选项
  * @param {string} options.eventId - 事件 ID
@@ -159,43 +262,50 @@ function createReminderCron({ eventId, stageId, eventTime, offset, offsetUnit, m
   
   const triggerTime = new Date(eventDate.getTime() - offsetMs);
   
-  // 生成 Cron 任务名称
-  const cronName = `claw-calendar-${eventId}-${stageId}`;
+  // 获取用户配置和启用的渠道
+  const userConfig = getUserChannelConfig();
+  const channels = getEnabledChannels(userConfig);
   
-  // 创建 Cron 任务（一次性）
+  if (channels.length === 0) {
+    return {
+      success: false,
+      error: '没有启用的推送渠道'
+    };
+  }
+  
+  // 调度配置
   const schedule = {
     kind: 'at',
     at: triggerTime.toISOString()
   };
   
-  const payload = {
-    kind: 'agentTurn',
-    message: `推送提醒：${message}`,
-    context: {
-      eventId: eventId,
-      stageId: stageId,
-      triggerTime: triggerTime.toISOString()
+  // 为每个渠道创建 Cron 任务
+  const results = [];
+  for (const channelConfig of channels) {
+    const cronName = `claw-calendar-${eventId}-${stageId}-${channelConfig.type}`;
+    
+    const result = createCronJob(cronName, schedule, message, channelConfig);
+    
+    if (result.success) {
+      results.push({
+        channel: channelConfig.type,
+        cronJobId: result.cronJobId,
+        to: result.to
+      });
     }
-  };
+  }
   
-  const result = createCronJob(cronName, schedule, payload, {
-    sessionTarget: 'isolated',
-    deleteAfterRun: true,
-    deliveryMode: 'announce'
-  });
-  
-  if (result.success) {
+  if (results.length > 0) {
     return {
       success: true,
-      cronJobId: result.cronJobId || cronName,
       triggerTime: triggerTime.toISOString(),
-      message: message,
-      rawData: result.rawData
+      channels: results,
+      message: message
     };
   } else {
     return {
       success: false,
-      error: result.error
+      error: '所有渠道创建失败'
     };
   }
 }
@@ -222,9 +332,11 @@ function updateReminderCrons(eventId, newEventTime) {
   // 1. 删除旧 Cron 任务
   const deletedCrons = [];
   for (const stage of event.reminderStages) {
-    if (stage.cronJobId) {
-      deleteCronJob(stage.cronJobId);
-      deletedCrons.push(stage.cronJobId);
+    if (stage.cronJobIds) {
+      for (const cronJobId of stage.cronJobIds) {
+        deleteCronJob(cronJobId);
+        deletedCrons.push(cronJobId);
+      }
     }
   }
   
@@ -241,9 +353,9 @@ function updateReminderCrons(eventId, newEventTime) {
     });
     
     if (result.success) {
-      stage.cronJobId = result.cronJobId;
+      stage.cronJobIds = result.channels.map(c => c.cronJobId);
       stage.triggerTime = result.triggerTime;
-      createdCrons.push(result.cronJobId);
+      createdCrons.push(...stage.cronJobIds);
     }
   }
   
@@ -279,10 +391,12 @@ function deleteReminderCrons(eventId) {
   // 删除所有 Cron 任务
   const deletedCrons = [];
   for (const stage of event.reminderStages) {
-    if (stage.cronJobId) {
-      const result = deleteCronJob(stage.cronJobId);
-      if (result.success) {
-        deletedCrons.push(stage.cronJobId);
+    if (stage.cronJobIds) {
+      for (const cronJobId of stage.cronJobIds) {
+        const result = deleteCronJob(cronJobId);
+        if (result.success) {
+          deletedCrons.push(cronJobId);
+        }
       }
     }
   }
@@ -336,14 +450,17 @@ function testCronCreation(triggerTime) {
     at: triggerTime
   };
   
-  const payload = {
-    kind: 'agentTurn',
-    message: '🧪 Cron 测试任务'
-  };
+  const userConfig = getUserChannelConfig();
+  const channels = getEnabledChannels(userConfig);
+  
+  if (channels.length === 0) {
+    return { success: false, error: '没有启用的推送渠道' };
+  }
   
   const cronName = `test-cron-${Date.now()}`;
+  const message = '🧪 Cron 测试任务';
   
-  return createCronJob(cronName, schedule, payload);
+  return createCronJob(cronName, schedule, message, channels[0]);
 }
 
 // ============================================================================
@@ -361,6 +478,10 @@ module.exports = {
   createCronJob,
   deleteCronJob,
   listCalendarCrons,
+  
+  // 用户配置
+  getUserChannelConfig,
+  getEnabledChannels,
   
   // 测试
   testCronCreation,

@@ -1,13 +1,12 @@
 #!/usr/bin/env node
 
 /**
- * 事件管理工具 v3.0 (纯 Cron 驱动架构)
+ * 事件管理工具 v4.0 (多渠道 Cron 驱动架构)
  * 
  * 核心变更：
- * - 支持 reminderStages（多阶段提醒）
- * - 创建事件时自动创建 Cron 任务
- * - 修改事件时自动更新 Cron 任务
- * - 删除事件时自动删除 Cron 任务
+ * - 支持 reminderStages 的 cronJobIds 数组（多渠道）
+ * - 支持 pushedChannels 对象（每个渠道独立推送状态）
+ * - Schema version: 4
  */
 
 const { generateEventId, generateStageId, savePlan, getPlanById, deletePlanById, readSettings } = require('./file-ops.js');
@@ -34,6 +33,12 @@ function parseTime(timeStr) {
 
 /**
  * 计算事件的完整时间（ISO 8601）
+ * 
+ * 重要：用户输入的是北京时间，需要转换为 UTC 存储
+ * 
+ * @param {Object} schedule - 事件时间表
+ * @param {string} timezone - 时区（默认 Asia/Shanghai）
+ * @returns {string|null} ISO 8601 格式（UTC）
  */
 function calculateEventTime(schedule, timezone = 'Asia/Shanghai') {
   const date = schedule.date || schedule.displayDate;
@@ -44,14 +49,19 @@ function calculateEventTime(schedule, timezone = 'Asia/Shanghai') {
     return null;
   }
   
-  const eventDate = new Date(date);
-  eventDate.setHours(time.hours, time.minutes, 0, 0);
+  // 关键修复：创建带时区的日期字符串
+  // 用户输入：2026-04-09 00:50 (北京时间)
+  // 转换为：2026-04-09T00:50:00+08:00
+  const beijingTimeStr = `${date}T${String(time.hours).padStart(2, '0')}:${String(time.minutes).padStart(2, '0')}:00+08:00`;
+  const eventDateBeijing = new Date(beijingTimeStr);
   
-  return eventDate.toISOString();
+  // 转换为 UTC 存储（toISOString 自动处理）
+  // 结果：2026-04-08T16:50:00.000Z
+  return eventDateBeijing.toISOString();
 }
 
 /**
- * 创建默认提醒阶段
+ * 创建默认提醒阶段（v4.0 Schema）
  */
 function createDefaultStages(priority = 'medium') {
   const settings = readSettings();
@@ -69,8 +79,9 @@ function createDefaultStages(priority = 'medium') {
     offsetUnit: 'minutes',
     message: `${offset} 分钟后有安排`,
     priority: priority,
-    pushedAt: null,
-    cronJobId: null,
+    // v4.0 Schema: 多渠道支持
+    cronJobIds: [],  // 数组，每个渠道一个 Cron ID
+    pushedChannels: {},  // 每个渠道独立推送状态
     triggerTime: null
   }));
 }
@@ -94,12 +105,21 @@ function appendPlan(plan) {
     description: plan.description || null,
     reminderStages: plan.reminderStages || [],
     notify: plan.notify || {
-      channels: ['qq', 'wechat', 'webchat'],
+      channels: ['qq', 'wechat'],
       enabled: true
+    },
+    lifecycle: {
+      status: 'active',
+      completedAt: null,
+      cancelledAt: null,
+      expiredAt: null
     },
     metadata: {
       createdAt: new Date().toISOString(),
-      version: 2
+      updatedAt: new Date().toISOString(),
+      version: 4,  // v4.0 Schema
+      archived: false,
+      archivedAt: null
     }
   };
   
@@ -107,13 +127,18 @@ function appendPlan(plan) {
     event.reminderStages = createDefaultStages(event.priority);
   }
   
-  savePlan(event);
-  
+  // 计算 UTC 时间（用于排序和索引）
   const eventTime = calculateEventTime(event.schedule);
+  if (eventTime) {
+    event.schedule.utcStart = eventTime;
+  }
+  
+  savePlan(event);
   if (!eventTime) {
     return { success: false, error: '无法解析事件时间' };
   }
   
+  // 为每个阶段创建 Cron 任务（多渠道）
   const createdCrons = [];
   for (const stage of event.reminderStages) {
     const cronResult = createReminderCron({
@@ -126,9 +151,19 @@ function appendPlan(plan) {
     });
     
     if (cronResult.success) {
-      stage.cronJobId = cronResult.cronJobId;
+      // v4.0 Schema: 存储多个 Cron ID
+      stage.cronJobIds = cronResult.channels.map(c => c.cronJobId);
       stage.triggerTime = cronResult.triggerTime;
-      createdCrons.push(cronResult.cronJobId);
+      // 初始化推送状态
+      stage.pushedChannels = {};
+      for (const ch of cronResult.channels) {
+        stage.pushedChannels[ch.channel] = {
+          pushedAt: null,
+          cronJobId: ch.cronJobId,
+          status: 'pending'
+        };
+      }
+      createdCrons.push(...stage.cronJobIds);
     } else {
       console.error(`创建 Cron 任务失败：${cronResult.error}`);
     }
@@ -166,6 +201,9 @@ function updatePlan(planId, updates) {
     const newEventTime = calculateEventTime(updates.schedule);
     
     if (newEventTime) {
+      // 更新 UTC 时间字段
+      event.schedule.utcStart = newEventTime;
+      
       console.log('   事件时间变更，更新 Cron 任务...');
       const cronResult = updateReminderCrons(planId, newEventTime);
       
@@ -240,12 +278,38 @@ function cancelPlan(planId, reason = '用户取消') {
   
   deleteReminderCrons(planId);
   
-  event.status = 'cancelled';
+  event.lifecycle.status = 'cancelled';
+  event.lifecycle.cancelledAt = new Date().toISOString();
   event.cancelReason = reason;
   event.metadata.updatedAt = new Date().toISOString();
   savePlan(event);
   
   console.log(`✅ 事件已取消：${planId}`);
+  
+  return {
+    success: true,
+    event: event
+  };
+}
+
+/**
+ * 完成事件
+ */
+function completePlan(planId) {
+  console.log('📝 完成事件:', planId);
+  
+  const event = getPlanById(planId);
+  
+  if (!event) {
+    return { success: false, error: '事件不存在' };
+  }
+  
+  event.lifecycle.status = 'completed';
+  event.lifecycle.completedAt = new Date().toISOString();
+  event.metadata.updatedAt = new Date().toISOString();
+  savePlan(event);
+  
+  console.log(`✅ 事件已完成：${planId}`);
   
   return {
     success: true,
@@ -278,6 +342,7 @@ module.exports = {
   updatePlan,
   deletePlan,
   cancelPlan,
+  completePlan,
   getPlan,
   listPlans,
   parseTime,

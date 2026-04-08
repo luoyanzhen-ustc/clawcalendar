@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 
 /**
- * 推送提醒工具 v3.0 (纯 Cron 驱动架构)
+ * 推送提醒工具 v4.0 (多渠道 Cron 驱动架构)
  * 
  * 核心变更：
- * - 从推送多个事件 → 推送单个阶段
- * - 不再需要去重逻辑（Cron 一次性触发）
- * - 支持多渠道推送（QQ/微信/Web）
+ * - 适配 v4.0 Schema: pushedChannels 对象
+ * - 每个渠道独立推送状态
+ * - 支持部分渠道推送失败的重试
  */
 
 const fs = require('fs');
@@ -40,87 +40,25 @@ function getPlansFile() {
 }
 
 /**
- * 获取已知 QQ 用户列表
+ * 获取用户渠道配置（从 known-users.json）
  */
-function getKnownQQUsers() {
-  const knownUsersFile = path.join(
-    process.env.HOME || '/root',
-    '.openclaw',
-    'qqbot',
-    'data',
-    'known-users.json'
-  );
+function getUserChannelConfig() {
+  const knownUsersFile = path.join(getDataDir(), 'known-users.json');
   
   if (!fs.existsSync(knownUsersFile)) {
-    return [];
+    return null;
   }
   
   try {
-    const content = fs.readFileSync(knownUsersFile, 'utf8');
-    return JSON.parse(content);
+    const users = JSON.parse(fs.readFileSync(knownUsersFile, 'utf8'));
+    if (users && users.length > 0) {
+      return users[0];
+    }
   } catch (error) {
     console.error('读取 known-users.json 失败:', error.message);
-    return [];
-  }
-}
-
-/**
- * 获取已知微信用户列表
- */
-function getKnownWeChatUsers() {
-  const wechatDir = path.join(
-    process.env.HOME || '/root',
-    '.openclaw',
-    'openclaw-weixin',
-    'accounts'
-  );
-  
-  const accountsFile = path.join(
-    process.env.HOME || '/root',
-    '.openclaw',
-    'openclaw-weixin',
-    'accounts.json'
-  );
-  
-  if (!fs.existsSync(accountsFile) || !fs.existsSync(wechatDir)) {
-    return [];
   }
   
-  try {
-    const accounts = JSON.parse(fs.readFileSync(accountsFile, 'utf8'));
-    
-    const users = [];
-    for (const accountId of accounts) {
-      const accountFile = path.join(wechatDir, `${accountId}.json`);
-      if (!fs.existsSync(accountFile)) {
-        continue;
-      }
-      
-      const account = JSON.parse(fs.readFileSync(accountFile, 'utf8'));
-      if (account.userId) {
-        users.push(account.userId);
-      }
-    }
-    
-    return users;
-  } catch (error) {
-    console.error('读取微信用户失败:', error.message);
-    return [];
-  }
-}
-
-/**
- * 检查 QQ 是否已连接
- */
-function isQQConnected() {
-  return getKnownQQUsers().length > 0;
-}
-
-/**
- * 检查微信是否已连接
- */
-function isWeChatConnected() {
-  return getKnownWeChatUsers().length > 0;
+  return null;
 }
 
 /**
@@ -146,97 +84,85 @@ function formatReminderMessage(event, stageMessage) {
 }
 
 /**
- * 推送消息到所有 QQ 用户
+ * 推送消息到 QQ
  */
-function pushToQQUsers(event, stageMessage, callMessage) {
-  const users = getKnownQQUsers();
+function pushToQQ(event, stageMessage, callMessage) {
+  const userConfig = getUserChannelConfig();
   
-  if (users.length === 0) {
-    console.log('⚠️  没有已知的 QQ 用户');
-    return { success: false, reason: 'no_users', pushed: 0, failed: 0 };
+  if (!userConfig?.qq?.openid || !userConfig.qq.enabled) {
+    console.log('⚠️  QQ 渠道未配置');
+    return { success: false, reason: 'not_configured', pushed: 0 };
   }
   
-  const results = { pushed: 0, failed: 0, details: [] };
+  const target = `qqbot:c2c:${userConfig.qq.openid}`;
   const messageText = formatReminderMessage(event, stageMessage);
   
-  for (const user of users) {
-    const target = `qqbot:${user.type}:${user.openid}`;
+  try {
+    const result = callMessage({
+      action: 'send',
+      channel: 'qqbot',
+      target: target,
+      message: messageText
+    });
     
-    try {
-      const result = callMessage({
-        action: 'send',
-        channel: 'qqbot',
-        target: target,
-        message: messageText
-      });
-      
-      if (result?.messageId || result?.success) {
-        results.pushed++;
-        console.log(`✅ 推送到 QQ: ${target}`);
-        results.details.push({ target, success: true, messageId: result.messageId });
-      } else {
-        results.failed++;
-        console.error(`❌ 推送失败到 QQ ${target}`);
-        results.details.push({ target, success: false, error: 'unknown' });
-      }
-      
-    } catch (error) {
-      results.failed++;
-      console.error(`❌ 推送异常到 QQ ${target}:`, error.message);
-      results.details.push({ target, success: false, error: error.message });
+    if (result?.messageId || result?.success) {
+      console.log(`✅ 推送到 QQ: ${target}`);
+      return { 
+        success: true, 
+        pushed: 1, 
+        messageId: result.messageId,
+        target: target
+      };
+    } else {
+      console.error(`❌ 推送失败到 QQ ${target}`);
+      return { success: false, pushed: 0, error: 'unknown' };
     }
+    
+  } catch (error) {
+    console.error(`❌ 推送异常到 QQ ${target}:`, error.message);
+    return { success: false, pushed: 0, error: error.message };
   }
-  
-  return {
-    success: results.pushed > 0,
-    ...results
-  };
 }
 
 /**
- * 推送消息到所有微信用户
+ * 推送消息到微信
  */
-function pushToWeChatUsers(event, stageMessage, callMessage) {
-  const users = getKnownWeChatUsers();
+function pushToWeChat(event, stageMessage, callMessage) {
+  const userConfig = getUserChannelConfig();
   
-  if (users.length === 0) {
-    console.log('⚠️  没有已知的微信用户');
-    return { success: false, reason: 'no_users', pushed: 0, failed: 0 };
+  if (!userConfig?.weixin?.userId || !userConfig.weixin.enabled) {
+    console.log('⚠️  微信渠道未配置');
+    return { success: false, reason: 'not_configured', pushed: 0 };
   }
   
-  const results = { pushed: 0, failed: 0, details: [] };
+  const target = userConfig.weixin.userId;
   const messageText = formatReminderMessage(event, stageMessage);
   
-  for (const userId of users) {
-    try {
-      const result = callMessage({
-        action: 'send',
-        channel: 'openclaw-weixin',
-        target: userId,
-        message: messageText
-      });
-      
-      if (result?.messageId || result?.success) {
-        results.pushed++;
-        console.log(`✅ 推送到微信：${userId}`);
-        results.details.push({ target: userId, success: true, messageId: result.messageId });
-      } else {
-        results.failed++;
-        console.error(`❌ 推送失败到微信 ${userId}`);
-        results.details.push({ target: userId, success: false, error: 'unknown' });
-      }
-      
-    } catch (error) {
-      results.failed++;
-      console.error(`❌ 推送异常到微信 ${userId}:`, error.message);
-      results.details.push({ target: userId, success: false, error: error.message });
+  try {
+    const result = callMessage({
+      action: 'send',
+      channel: 'openclaw-weixin',
+      target: target,
+      message: messageText
+    });
+    
+    if (result?.messageId || result?.success) {
+      console.log(`✅ 推送到微信：${target}`);
+      return { 
+        success: true, 
+        pushed: 1, 
+        messageId: result.messageId,
+        target: target
+      };
+    } else {
+      console.error(`❌ 推送失败到微信 ${target}`);
+      return { success: false, pushed: 0, error: 'unknown' };
     }
+    
+  } catch (error) {
+    console.error(`❌ 推送异常到微信 ${target}:`, error.message);
+    return { success: false, pushed: 0, error: error.message };
   }
-  
-  return {
-    success: results.pushed > 0,
-    ...results
-  };
 }
 
 /**
@@ -244,11 +170,11 @@ function pushToWeChatUsers(event, stageMessage, callMessage) {
  */
 function pushToWeb(event, stageMessage) {
   console.log('📱 Web UI 推送:', formatReminderMessage(event, stageMessage));
-  return { success: true, pushed: 1 };
+  return { success: true, pushed: 1, channel: 'webchat' };
 }
 
 /**
- * 推送单个阶段的提醒
+ * 推送单个阶段的提醒（v4.0 Schema）
  * 
  * @param {Object} options - 选项
  * @param {string} options.eventId - 事件 ID
@@ -279,71 +205,96 @@ function pushReminder({ eventId, stageId, callMessage }) {
     return { success: false, error: '阶段不存在' };
   }
   
-  if (stage.pushedAt) {
-    return { success: false, error: '阶段已推送过', pushedAt: stage.pushedAt };
-  }
-  
   // 3. 读取设置
   const settingsFile = getSettingsFile();
   const settings = fs.existsSync(settingsFile) 
     ? JSON.parse(fs.readFileSync(settingsFile, 'utf8'))
     : {};
   
-  const channels = settings.notify?.channels || {};
-  const webchatEnabled = channels.webchat !== false;
-  const qqEnabled = channels.qq !== false && isQQConnected();
-  const wechatEnabled = channels.wechat !== false && isWeChatConnected();
+  const channels = settings.notify?.channels || ['qq', 'wechat', 'webchat'];
   
-  console.log(`📱 渠道配置：Web=${webchatEnabled}, QQ=${qqEnabled}, 微信=${wechatEnabled}`);
+  console.log(`📱 推送渠道：${channels.join(', ')}`);
   
-  // 4. 推送到各渠道
-  const pushedChannels = [];
-  const results = {
-    webchat: { success: false, pushed: 0 },
-    qq: { success: false, pushed: 0 },
-    wechat: { success: false, pushed: 0 }
+  // 4. 推送到各渠道（v4.0: 每个渠道独立状态）
+  const pushedChannels = {};
+  const results = {};
+  
+  for (const channelType of channels) {
+    // 检查该渠道是否已推送
+    if (stage.pushedChannels?.[channelType]?.pushedAt) {
+      console.log(`⏭️  渠道 ${channelType} 已推送，跳过`);
+      results[channelType] = { success: true, skipped: true };
+      pushedChannels[channelType] = stage.pushedChannels[channelType];
+      continue;
+    }
+    
+    let result;
+    
+    // 推送到对应渠道
+    if (channelType === 'qq') {
+      result = pushToQQ(event, stage.message, callMessage);
+    } else if (channelType === 'wechat' || channelType === 'weixin') {
+      result = pushToWeChat(event, stage.message, callMessage);
+    } else if (channelType === 'webchat') {
+      result = pushToWeb(event, stage.message);
+    } else {
+      console.log(`⚠️  未知渠道：${channelType}`);
+      continue;
+    }
+    
+    results[channelType] = result;
+    
+    // 记录推送状态（v4.0 Schema）
+    if (result.success) {
+      pushedChannels[channelType] = {
+        pushedAt: new Date().toISOString(),
+        cronJobId: stage.cronJobIds?.find(id => id.includes(channelType)) || null,
+        status: 'delivered',
+        messageId: result.messageId
+      };
+      console.log(`✅ 渠道 ${channelType} 推送成功`);
+    } else {
+      pushedChannels[channelType] = {
+        pushedAt: null,
+        cronJobId: null,
+        status: 'failed',
+        error: result.error
+      };
+      console.error(`❌ 渠道 ${channelType} 推送失败：${result.error}`);
+    }
+  }
+  
+  // 5. 更新事件（v4.0 Schema: 更新 pushedChannels）
+  stage.pushedChannels = {
+    ...stage.pushedChannels,
+    ...pushedChannels
   };
   
-  // 推送到 Web UI
-  if (webchatEnabled) {
-    const result = pushToWeb(event, stage.message);
-    results.webchat = result;
-    if (result.success) pushedChannels.push('webchat');
+  // 检查是否所有渠道都推送成功
+  const allPushed = channels.every(ch => 
+    stage.pushedChannels[ch]?.pushedAt !== null
+  );
+  
+  if (allPushed) {
+    stage.pushedAt = new Date().toISOString();  // 兼容字段
   }
   
-  // 推送到 QQ
-  if (qqEnabled) {
-    const result = pushToQQUsers(event, stage.message, callMessage);
-    results.qq = result;
-    if (result.success) pushedChannels.push('qq');
-  }
-  
-  // 推送到微信
-  if (wechatEnabled) {
-    const result = pushToWeChatUsers(event, stage.message, callMessage);
-    results.wechat = result;
-    if (result.success) pushedChannels.push('wechat');
-  }
-  
-  // 5. 标记为已推送
-  stage.pushedAt = new Date().toISOString();
-  
-  // 6. 更新事件
+  // 更新事件文件
   data.plans = data.plans.map(p => 
     p.id === eventId ? { ...p, reminderStages: event.reminderStages } : p
   );
   data.metadata.updatedAt = new Date().toISOString();
   fs.writeFileSync(plansFile, JSON.stringify(data, null, 2), 'utf8');
   
-  // 7. 计算总推送数
-  const totalPushed = results.webchat.pushed + results.qq.pushed + results.wechat.pushed;
+  // 6. 计算总推送数
+  const totalPushed = Object.values(results).filter(r => r?.success).length;
   
-  console.log(`✅ 推送完成：${totalPushed} 次推送`);
+  console.log(`✅ 推送完成：${totalPushed}/${channels.length} 渠道成功`);
   
   return {
-    success: true,
+    success: totalPushed > 0,
     pushed: totalPushed,
-    channels: pushedChannels,
+    channels: channels.filter(ch => results[ch]?.success),
     results: results
   };
 }
@@ -368,17 +319,17 @@ function testPush(callMessage) {
         offset: 30,
         offsetUnit: 'minutes',
         message: '30 分钟后有安排',
-        pushedAt: null
+        pushedChannels: {}
       }
     ]
   };
   
   console.log('测试 QQ 推送...');
-  const qqResult = pushToQQUsers(testEvent, '测试消息', callMessage);
+  const qqResult = pushToQQ(testEvent, '测试消息', callMessage);
   console.log('QQ 推送结果:', qqResult);
   
   console.log('测试微信推送...');
-  const wechatResult = pushToWeChatUsers(testEvent, '测试消息', callMessage);
+  const wechatResult = pushToWeChat(testEvent, '测试消息', callMessage);
   console.log('微信推送结果:', wechatResult);
   
   return {
@@ -394,16 +345,13 @@ function testPush(callMessage) {
 module.exports = {
   // 核心函数
   pushReminder,
-  pushToQQUsers,
-  pushToWeChatUsers,
+  pushToQQ,
+  pushToWeChat,
   pushToWeb,
   
   // 工具函数
   formatReminderMessage,
-  getKnownQQUsers,
-  getKnownWeChatUsers,
-  isQQConnected,
-  isWeChatConnected,
+  getUserChannelConfig,
   
   // 测试
   testPush

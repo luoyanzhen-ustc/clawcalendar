@@ -36,15 +36,18 @@ function getCurrentWeek(semesterStart) {
 
 /**
  * 解析相对时间表达
+ * 
+ * 重要：返回的是北京时间（UTC+8），不是 UTC
+ * 
  * @param {string} text - 如"明天下午 3 点"、"下周三"
- * @param {Date} baseDate - 基准时间（默认现在）
- * @returns {Date|null} 解析后的日期
+ * @param {Date} baseDate - 基准时间（默认现在，北京时间）
+ * @returns {Date|null} 解析后的日期（北京时间）
  */
 function parseRelativeTime(text, baseDate = new Date()) {
   const now = baseDate || new Date();
   let result = new Date(now);
   
-  // 清除时分秒
+  // 清除时分秒（保持当前时区）
   result.setHours(0, 0, 0, 0);
   
   // 相对日期
@@ -131,6 +134,8 @@ function parseRelativeTime(text, baseDate = new Date()) {
     result.setHours(hourOffset, 0, 0, 0);
   }
   
+  // 重要：返回的是北京时间（UTC+8）
+  // 调用者需要使用 toISOString() 转换为 UTC 存储
   return result;
 }
 

@@ -1,12 +1,16 @@
 #!/usr/bin/env node
 
 /**
- * 归档工具
+ * 归档工具 v4.0
  * 
  * 功能：
  * - 周归档：每周一凌晨生成上周总结，移动已完成计划
  * - 学期归档：学期末统一打包
  * - 生成学期总结
+ * 
+ * 适配 v4.0 Schema:
+ * - lifecycle.status 替代旧 status 字段
+ * - metadata.version = 4
  */
 
 const fs = require('fs');
@@ -58,20 +62,24 @@ function generateWeeklyReport(weekNumber) {
     p.schedule.displayDate <= weekRange.end
   );
   
+  // v4.0 Schema: 支持 lifecycle.status
+  const getLifecycleStatus = (p) => p.lifecycle?.status || p.status || 'active';
+  
   events.push(...weekPlans.map(p => ({ ...p, type: 'plan' })));
   
-  // 2. 统计
+  // 2. 统计（v4.0 Schema）
   const totalPlans = weekPlans.length;
-  const completed = weekPlans.filter(p => p.lifecycle?.status === 'completed').length;
-  const cancelled = weekPlans.filter(p => p.lifecycle?.status === 'cancelled').length;
-  const expired = weekPlans.filter(p => p.lifecycle?.status === 'expired').length;
-  const active = weekPlans.filter(p => p.lifecycle?.status === 'active').length;
+  const getLifecycleStatus = (p) => p.lifecycle?.status || p.status || 'active';
+  const completed = weekPlans.filter(p => getLifecycleStatus(p) === 'completed').length;
+  const cancelled = weekPlans.filter(p => getLifecycleStatus(p) === 'cancelled').length;
+  const expired = weekPlans.filter(p => getLifecycleStatus(p) === 'expired').length;
+  const active = weekPlans.filter(p => getLifecycleStatus(p) === 'active').length;
   
   const stats = {
     totalEvents: events.length,
     totalPlans,
     byType: groupBy(events, 'type'),
-    byStatus: groupBy(events, 'lifecycle.status'),
+    byStatus: groupBy(events.map(e => e.lifecycle?.status || e.status || 'active')),
     completed,
     cancelled,
     expired,

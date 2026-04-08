@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 
 /**
- * OpenClaw 原生工具注册脚本 v3.0
+ * OpenClaw 原生工具注册脚本 v4.0
  * 
  * 将所有 claw-calendar 工具注册为 OpenClaw Native Tools
- * 无需在 SKILL.md 中使用 require()
+ * 支持 v4.0 Schema（多渠道推送）
  */
 
 const path = require('path');
@@ -41,6 +41,12 @@ const TOOLS = [
     function: 'cancelPlan'
   },
   {
+    name: 'calendar_complete_plan',
+    description: '完成事件',
+    module: 'plan-manager',
+    function: 'completePlan'
+  },
+  {
     name: 'calendar_get_plan',
     description: '查询单个事件',
     module: 'plan-manager',
@@ -56,7 +62,7 @@ const TOOLS = [
   // Cron 管理工具
   {
     name: 'calendar_create_reminder_cron',
-    description: '为事件阶段创建 Cron 任务',
+    description: '为事件阶段创建 Cron 任务（多渠道）',
     module: 'cron-manager',
     function: 'createReminderCron'
   },
@@ -82,7 +88,7 @@ const TOOLS = [
   // 推送工具
   {
     name: 'calendar_push_reminder',
-    description: '推送单个阶段的提醒',
+    description: '推送单个阶段的提醒（多渠道）',
     module: 'push-reminders',
     function: 'pushReminder'
   },
@@ -91,6 +97,72 @@ const TOOLS = [
     description: '测试推送功能',
     module: 'push-reminders',
     function: 'testPush'
+  },
+  
+  // 归档管理工具
+  {
+    name: 'calendar_generate_weekly_report',
+    description: '生成周总结报告',
+    module: 'archive-ops',
+    function: 'generateWeeklyReport'
+  },
+  {
+    name: 'calendar_archive_last_week',
+    description: '归档上周计划',
+    module: 'archive-ops',
+    function: 'archiveLastWeekPlans'
+  },
+  {
+    name: 'calendar_archive_semester',
+    description: '学期末归档',
+    module: 'archive-ops',
+    function: 'archiveSemester'
+  },
+  {
+    name: 'calendar_generate_semester_summary',
+    description: '生成学期总结',
+    module: 'archive-ops',
+    function: 'generateSemesterSummary'
+  },
+  
+  // 索引管理工具
+  {
+    name: 'calendar_build_today_index',
+    description: '构建今日索引',
+    module: 'rebuild-index',
+    function: 'buildTodayIndex'
+  },
+  {
+    name: 'calendar_build_upcoming_index',
+    description: '构建未来 7 天索引',
+    module: 'rebuild-index',
+    function: 'buildUpcomingIndex'
+  },
+  {
+    name: 'calendar_cleanup_expired',
+    description: '清理过期事件',
+    module: 'rebuild-index',
+    function: 'cleanupExpiredPlans'
+  },
+  {
+    name: 'calendar_update_course_week',
+    description: '更新课程周次',
+    module: 'rebuild-index',
+    function: 'updateCourseWeek'
+  },
+  
+  // OCR 工具
+  {
+    name: 'calendar_parse_schedule_image',
+    description: '识别课表图片',
+    module: 'ocr',
+    function: 'parseScheduleImage'
+  },
+  {
+    name: 'calendar_courses_to_events',
+    description: '将课程列表转换为事件数组',
+    module: 'ocr',
+    function: 'coursesToEvents'
   },
   
   // 辅助工具
@@ -124,17 +196,13 @@ const TOOLS = [
     module: 'date-math',
     function: 'getWeekdayName'
   },
+  
+  // 用户配置工具
   {
-    name: 'calendar_parse_schedule_image',
-    description: '识别课表图片',
-    module: 'ocr',
-    function: 'parseScheduleImage'
-  },
-  {
-    name: 'calendar_courses_to_events',
-    description: '将课程列表转换为事件数组',
-    module: 'ocr',
-    function: 'coursesToEvents'
+    name: 'calendar_get_user_config',
+    description: '获取用户渠道配置',
+    module: 'cron-manager',
+    function: 'getUserChannelConfig'
   }
 ];
 
@@ -143,7 +211,7 @@ const TOOLS = [
 // ============================================================================
 
 function registerTools() {
-  console.log('🔧 开始注册 Claw Calendar 工具...\n');
+  console.log('🔧 开始注册 Claw Calendar 工具 (v4.0)...\n');
   
   const toolsDir = path.join(__dirname, 'tools');
   const registeredTools = [];

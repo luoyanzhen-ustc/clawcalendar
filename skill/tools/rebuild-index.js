@@ -1,12 +1,15 @@
 #!/usr/bin/env node
 
 /**
- * 索引重建脚本
+ * 索引重建脚本 v4.0
  * 
  * 功能：
  * - 每天凌晨 2 点重建 today.json 和 upcoming.json
  * - 清理过期事件
  * - 更新学期周次
+ * 
+ * 适配 v4.0 Schema:
+ * - lifecycle.status 替代旧 status 字段
  */
 
 const fs = require('fs');
@@ -261,7 +264,7 @@ function generateReminders(eventsByDay) {
 }
 
 /**
- * 清理过期事件
+ * 清理过期事件（v4.0 Schema）
  */
 function cleanupExpiredPlans() {
   const plansData = readPlans();
@@ -274,11 +277,14 @@ function cleanupExpiredPlans() {
   let expiredCount = 0;
   
   plansData.plans.forEach(plan => {
-    if (plan.lifecycle?.status !== 'active') return;
+    // v4.0 Schema: 使用 lifecycle.status
+    const status = plan.lifecycle?.status || plan.status || 'active';
+    if (status !== 'active') return;
     
     const planDate = plan.schedule.displayDate;
     
     if (planDate < todayStr) {
+      if (!plan.lifecycle) plan.lifecycle = {};
       plan.lifecycle.status = 'expired';
       plan.lifecycle.expiredAt = new Date().toISOString();
       expiredCount++;

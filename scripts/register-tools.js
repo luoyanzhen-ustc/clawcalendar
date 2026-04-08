@@ -226,13 +226,13 @@ const TOOLS_TO_REGISTER = [
   // 推送工具
   {
     name: 'calendar_push_reminders',
-    description: '推送即将发生的事件到配置的渠道（QQ/微信/Web）',
+    description: '推送单个阶段的提醒到配置的渠道（QQ/微信/Web）',
     params: [
-      { name: 'advanceMinutes', description: '提前多少分钟，默认 30', required: false },
-      { name: 'channels', description: '推送渠道数组，默认所有开启的渠道', required: false }
+      { name: 'planId', description: '事件 ID', required: true },
+      { name: 'stageId', description: '阶段 ID', required: true }
     ],
     module: 'push-reminders',
-    function: 'pushReminders'
+    function: 'pushReminder'
   },
   {
     name: 'calendar_test_push',
