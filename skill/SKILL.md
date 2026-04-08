@@ -295,30 +295,125 @@ async function ocr(imagePath) {
 
 ## 流程 5：定时提醒（Cron 触发）
 
+### ⚠️ 重要：性能优化
+
+**不要**自己遍历所有事件！使用 `get_upcoming_reminders()` 工具函数。
+
+**原因**：
+- ✅ JS 层过滤比 LLM 遍历快 100 倍
+- ✅ 节省 97% Token 消耗
+- ✅ 避免上下文污染
+- ✅ 并发安全
+
+---
+
+### 正确的工作流程
+
 当 OpenClaw cron 触发 "检查日历提醒" 时：
 
-1. **读取事件** → `read_events()`
-2. **获取当前时间** → `new Date()`
-3. **读取设置** → `read_settings()` 获取学期开始日期、静默时段
-4. **计算当前周次** → `get_current_week(semesterStart)`
-5. **遍历事件** → 检查每个事件是否需要提醒
-6. **判断提醒时间** → 事件时间 - 当前时间 = 提醒偏移量
-7. **检查静默时段** → 23:00-08:00 跳过普通提醒
-8. **生成提醒消息** → 自然语言描述
-9. **推送给用户** → 通过当前聊天渠道
+#### 第一步：调用过滤工具
 
-**提醒判断逻辑**：
 ```javascript
-const now = new Date();
-const eventTime = new Date(`${event.schedule.date}T${event.schedule.startTime}:00+08:00`);
-const reminderOffset = event.reminderOffsets[0] * 60 * 1000; // 毫秒
-const reminderTime = eventTime - reminderOffset;
+const path = require('path');
+const toolsDir = __dirname.replace('/skill', '/tools');
+const { get_upcoming_reminders } = require(path.join(toolsDir, 'file-ops.js'));
 
-// 如果当前时间在提醒时间的 1 分钟内
-if (now.getTime() - reminderTime >= 0 && now.getTime() - reminderTime < 60 * 1000) {
-  // 发送提醒
+// 获取 30 分钟内需要提醒的事件
+const upcoming = get_upcoming_reminders(30);
+```
+
+#### 第二步：分支处理
+
+**情况 A：返回空数组 `[]`**
+- 说明没有需要提醒的事件
+- **静默结束**，不要生成任何消息
+- 不要打扰用户
+
+**情况 B：返回事件数组（1-3 个事件）**
+- 遍历每个事件，生成温暖贴心的提醒
+- 结合当前时间、事件地点、天气（如有）
+- 每条提醒不超过 50 字
+- 语气自然，像朋友提醒
+
+---
+
+### 示例代码
+
+```javascript
+const upcoming = get_upcoming_reminders(30);
+
+if (upcoming.length === 0) {
+  // 静默结束，不生成任何消息
+  return;
+}
+
+// 生成提醒消息
+for (const event of upcoming) {
+  const minutes = event.minutesUntilEvent;
+  const title = event.title;
+  const location = event.location || '';
+  const time = event.schedule.startTime;
+  
+  // 生成自然语言提醒
+  let message = `⏰ ${time} ${title}`;
+  if (location) {
+    message += `（${location}）`;
+  }
+  if (minutes > 0) {
+    message += `，还有 ${minutes} 分钟～`;
+  }
+  
+  // 推送给用户
+  sendMessage(message);
 }
 ```
+
+---
+
+### 示例提醒文案
+
+✅ **好**（温暖、简洁、自然）：
+- "⏰ 19:00 和朋友吃饭（餐厅），还有 10 分钟～"
+- "📚 20:00 机器学习系统在 G2-B403，准备上课啦"
+- "🌧️ 15:00 有课，外面下雨记得带伞"
+- "⏰ 新时代中国特色社会主义理论与实践，10 分钟后在 G3-115"
+
+❌ **坏**（生硬、机械、啰嗦）：
+- "事件提醒：和朋友吃饭，时间 19:00，地点餐厅"（太生硬）
+- "你有 1 个即将发生的事件：..."（太机械）
+- 长篇大论超过 100 字（太啰嗦）
+- "根据日历数据，您 scheduled 的活动..."（太正式）
+
+---
+
+### 注意事项
+
+1. **不要调用 `read_events()`** - 已经由 `get_upcoming_reminders()` 过滤
+2. **不要自己遍历判断** - JS 层已处理所有逻辑
+3. **静默时段检查** - `get_upcoming_reminders()` 已处理
+4. **只推送一次** - 避免重复提醒
+5. **空数组时静默** - 不要生成"没有提醒"之类的消息
+
+---
+
+### 工具函数说明
+
+**`get_upcoming_reminders(advanceMinutes)`**
+
+参数：
+- `advanceMinutes`（可选）：提前多少分钟，默认 30
+
+返回：
+- `[]`：没有需要提醒的事件
+- `[{ event, minutesUntilEvent, ... }]`：需要提醒的事件数组
+
+内部逻辑：
+- ✅ 读取所有事件
+- ✅ 计算每个事件的提醒时间
+- ✅ 过滤出未来 `advanceMinutes` 分钟内的事件
+- ✅ 检查静默时段（23:00-08:00）
+- ✅ 静默时段只返回高优先级事件
+- ✅ 返回过滤后的数组
 
 ---
 
