@@ -1,0 +1,31 @@
+# 数据目录（用户隐私数据）
+data/
+calendar/
+
+# 日志
+*.log
+logs/
+
+# 临时文件
+*.tmp
+*.bak
+*.swp
+*~
+
+# Node.js
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# 备份文件
+*.backup
+*.backup.*

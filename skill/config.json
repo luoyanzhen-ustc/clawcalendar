@@ -1,0 +1,32 @@
+{
+  "name": "claw-calendar",
+  "version": "2.0.0",
+  "description": "Claw Calendar - Agentic Workflow 日历助手",
+  "timezone": "Asia/Shanghai",
+  "defaultView": "day",
+  "quietHours": ["23:00", "08:00"],
+  "ocr": {
+    "provider": "qwen-chat",
+    "enabled": true
+  },
+  "notify": {
+    "channels": ["current"],
+    "qq": {
+      "enabled": false
+    },
+    "wechat": {
+      "enabled": false
+    }
+  },
+  "reminderDefaults": {
+    "high": [1440, 60],
+    "medium": [30],
+    "low": [10]
+  },
+  "features": {
+    "imageRecognition": true,
+    "naturalLanguageQuery": true,
+    "smartReminders": true,
+    "multiChannelNotify": false
+  }
+}

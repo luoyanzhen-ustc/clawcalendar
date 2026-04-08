@@ -1,0 +1,48 @@
+{
+  "name": "claw-calendar",
+  "version": "2.0.0",
+  "description": "Agentic Workflow Calendar Skill for OpenClaw - 课表识别、日程管理、智能提醒",
+  "main": "skill/SKILL.md",
+  "scripts": {
+    "init": "node scripts/auto-init.js",
+    "test": "node scripts/test-ocr.js"
+  },
+  "keywords": [
+    "openclaw",
+    "skill",
+    "calendar",
+    "schedule",
+    "reminder",
+    "ocr",
+    "ustc"
+  ],
+  "author": "USTC Claw Team",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/luoyanzhen-ustc/USTCclaw-calendar.git"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "openclaw": {
+    "type": "skill",
+    "category": "productivity",
+    "emoji": "📅",
+    "triggers": [
+      "课表",
+      "日程",
+      "日历",
+      "今天有什么课",
+      "明天",
+      "这周安排",
+      "提醒我"
+    ],
+    "dataDir": "calendar",
+    "cron": {
+      "enabled": true,
+      "schedule": "*/30 * * * *",
+      "message": "检查日历提醒"
+    }
+  }
+}
