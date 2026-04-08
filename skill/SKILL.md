@@ -67,6 +67,21 @@ description: "智能日历助手。当用户上传课表图片、询问日程（
 | `calendar_parse_schedule_image` | 识别课表图片（需传入图片路径） |
 | `calendar_courses_to_events` | 将课程列表转换为事件数组 |
 
+### 推送工具
+
+| 工具名称 | 功能 | 参数 | 返回 |
+|----------|------|------|------|
+| `calendar_push_reminders` | 推送即将发生的事件到所有渠道（QQ/微信/Web） | `events` (事件数组), `settings` (设置对象), `callMessage` (message 工具函数) | `{ pushed: 数量, events: 已推送事件 ID 列表 }` |
+| `calendar_test_push` | 测试推送功能（仅用于调试） | `callMessage` | `{ qq: 结果，wechat: 结果 }` |
+
+**推送规则**:
+- 自动发现所有已知 QQ 和微信用户
+- 30 分钟内不重复推送同一事件
+- 静默时段（23:00-08:00）只推送高优先级事件
+- 用户可通过 `calendar_write_settings` 配置渠道开关
+
+---
+
 ---
 
 ### 工具调用示例
@@ -220,18 +235,52 @@ description: "智能日历助手。当用户上传课表图片、询问日程（
 
 ---
 
-### 流程 4：删除/修改事件
+### 流程 4：定时提醒推送（Cron 触发）
+
+**触发时机**: 每 30 分钟自动执行
+
+**流程**:
+1. **调用 `calendar_get_reminders(30)`** → 获取未来 30 分钟内的事件
+2. **检查结果**:
+   - 如果返回空数组 `[]` → 回复 `HEARTBEAT_OK`（无推送）
+   - 如果有事件 → 继续下一步
+3. **调用 `calendar_read_settings()`** → 读取推送配置
+4. **调用 `calendar_push_reminders({ events, settings, callMessage })`** → 推送到所有渠道
+5. **返回结果** → 告知推送了多少事件
+
+**示例**:
+```
+LLM: 调用 calendar_get_reminders(30)
+返回：[{ title: "机器学习系统课", ... }]
+
+LLM: 调用 calendar_read_settings()
+返回：{ notify: { enabled: true, channels: { qq: true, wechat: true } } }
+
+LLM: 调用 calendar_push_reminders({ events, settings, callMessage })
+返回：{ pushed: 2, events: ["evt-123"] }
+
+LLM: 回复 "✅ 已推送 1 个事件到 QQ 和微信"
+```
+
+**去重机制**:
+- 每个事件记录 `notify.lastPushedAt` 时间戳
+- 30 分钟内不重复推送
+- 推送后自动更新 `lastPushedAt`
+
+---
+
+### 流程 5：删除/修改事件
 
 **删除**：
 1. 理解要删除的事件（标题或时间）
-2. 调用 `delete_event(eventId)`
-3. 确认删除成功
+2. 调用 `calendar_delete_plan(planId)`（物理删除）或 `calendar_cancel_plan(planId, reason)`（取消并归档）
+3. 确认删除/取消成功
 
 **修改**：
 1. 理解要修改的事件和新内容
 2. 读取现有事件
 3. 更新字段
-4. 调用 `append_event(updatedEvent)`（会覆盖现有）
+4. 调用 `calendar_append_plan(updatedEvent)`（会覆盖现有）
 5. 确认修改成功
 
 ---

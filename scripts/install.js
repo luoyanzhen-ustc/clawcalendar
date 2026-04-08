@@ -110,23 +110,45 @@ function createDataDir() {
   const settingsFile = path.join(DATA_DIR, 'settings.json');
   if (!fs.existsSync(settingsFile)) {
     const defaultSettings = {
+      version: 1,
       timezone: 'Asia/Shanghai',
       semesterStart: null,
       notify: {
-        channels: ['current']
+        enabled: true,
+        channels: {
+          webchat: true,
+          qq: true,
+          wechat: true
+        },
+        timing: {
+          advanceMinutes: 30,
+          maxReminders: 3,
+          intervalMinutes: 10
+        },
+        quietHours: {
+          enabled: true,
+          start: '23:00',
+          end: '08:00'
+        }
       },
       reminderDefaults: {
         high: [1440, 60],
         medium: [30],
         low: [10]
-      },
-      quietHours: {
-        start: '23:00',
-        end: '08:00'
       }
     };
     fs.writeFileSync(settingsFile, JSON.stringify(defaultSettings, null, 2), 'utf8');
     console.log(`✅ 创建：${settingsFile}`);
+  }
+  
+  // 创建数据目录结构
+  const subDirs = ['active', 'archive', 'index'];
+  for (const dir of subDirs) {
+    const dirPath = path.join(DATA_DIR, dir);
+    if (!fs.existsSync(dirPath)) {
+      fs.mkdirSync(dirPath, { recursive: true });
+      console.log(`✅ 创建目录：${dirPath}`);
+    }
   }
 }
 
@@ -134,26 +156,35 @@ function createDataDir() {
  * 创建 cron 任务
  */
 function createCronJob() {
-  console.log(`⏰ 创建定时任务：每 30 分钟检查提醒`);
+  console.log(`⏰ 创建定时任务...`);
   
-  try {
-    // 检查是否已存在
-    const listOutput = execSync('openclaw cron list --json', { encoding: 'utf8' });
-    const jobs = JSON.parse(listOutput);
+  const cronScript = path.join(WORKSPACE_DIR, 'claw-calendar', 'skill', 'scripts', 'setup-cron.js');
+  
+  if (fs.existsSync(cronScript)) {
+    console.log(`📋 执行 Cron 配置脚本...`);
+    exec(`node "${cronScript}"`, { ignoreError: true });
+  } else {
+    console.log(`⚠️  Cron 配置脚本不存在，创建基础任务...`);
     
-    const exists = jobs.some(job => job.name === 'claw-calendar-remind');
-    if (exists) {
-      console.log(`ℹ️  Cron 任务已存在，跳过创建`);
-      return;
+    try {
+      // 检查是否已存在
+      const listOutput = execSync('openclaw cron list --json', { encoding: 'utf8' });
+      const jobs = JSON.parse(listOutput);
+      
+      const exists = jobs.some(job => job.name === 'claw-calendar-remind');
+      if (exists) {
+        console.log(`ℹ️  Cron 任务已存在，跳过创建`);
+        return;
+      }
+      
+      // 创建 cron 任务
+      exec(`openclaw cron add --schedule '*/30 * * * *' --name 'claw-calendar-remind' --payload '{"kind": "agentTurn", "message": "检查日历提醒，推送即将发生的事件到 QQ 和微信。调用 calendar_get_reminders(30) 获取事件，然后调用 calendar_push_reminders 推送。如果没有事件，回复 HEARTBEAT_OK。"}'`);
+      console.log(`✅ Cron 任务创建成功`);
+    } catch (error) {
+      console.log(`⚠️  创建 cron 任务失败：${error.message}`);
+      console.log(`   请手动执行：`);
+      console.log(`   openclaw cron add --schedule '*/30 * * * *' --name 'claw-calendar-remind' --payload '{"kind": "agentTurn", "message": "检查日历提醒并推送"}'`);
     }
-    
-    // 创建 cron 任务
-    exec(`openclaw cron add --schedule '*/30 * * * *' --name 'claw-calendar-remind' --payload '{"kind": "agentTurn", "message": "检查日历提醒，如果有即将发生的事件（30 分钟内），发送提醒消息。"}'`);
-    console.log(`✅ Cron 任务创建成功`);
-  } catch (error) {
-    console.log(`⚠️  创建 cron 任务失败：${error.message}`);
-    console.log(`   请手动执行：`);
-    console.log(`   openclaw cron add --schedule '*/30 * * * *' --name 'claw-calendar-remind' --payload '{"kind": "agentTurn", "message": "检查日历提醒"}'`);
   }
 }
 
