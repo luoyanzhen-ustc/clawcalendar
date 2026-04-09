@@ -18,6 +18,7 @@
 const { execSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
+const { getKnownUsersPath } = require('./path-utils.js');
 
 // ============================================================================
 // 用户配置
@@ -30,7 +31,7 @@ const fs = require('fs');
  */
 function getUserChannelConfig() {
   // 从 known-users.json 读取用户信息
-  const knownUsersPath = '/root/.openclaw/workspace/claw-calendar/data/known-users.json';
+  const knownUsersPath = getKnownUsersPath();
   
   try {
     if (fs.existsSync(knownUsersPath)) {
@@ -125,22 +126,16 @@ function parseCronList(output) {
 }
 
 /**
- * 创建 Cron 任务（支持多渠道）
- * 
- * 关键设计：
- * - Payload 是简单消息（如 "🔔 提醒：5 分钟后去喝水"）
- * - LLM 收到后直接调用 message 工具发送
- * - 无需调用 calendar_push_reminder 工具
- * - 与 5 点测试完全一致
+ * 创建 Cron 任务（支持多渠道 + 新逻辑：LLM 只生成文案，delivery 自动转发）
  * 
  * @param {string} name - 任务名称
  * @param {Object} schedule - 调度配置
- * @param {string} message - 消息内容（简单消息，如 "🔔 提醒：5 分钟后去喝水"）
+ * @param {string} payloadMessage - 消息内容（包含完整指令）
  * @param {Object} channelConfig - 渠道配置
  * @param {Object} options - 其他选项
  * @returns {Object} 创建结果
  */
-function createCronJob(name, schedule, message, channelConfig, options = {}) {
+function createCronJob(name, schedule, payloadMessage, channelConfig, options = {}) {
   const {
     deleteAfterRun = true
   } = options;
@@ -159,10 +154,16 @@ function createCronJob(name, schedule, message, channelConfig, options = {}) {
     cmd += ` --every '${schedule.everyMs}ms'`;
   }
   
-  // Payload（简单消息）
-  cmd += ` --message '${message}'`;
+  // Payload（纯文本，--message 会自动包装成 agentTurn）
+  // 转义单引号
+  const escapedMessage = payloadMessage.replace(/'/g, "'\\''");
+  cmd += ` --message '${escapedMessage}'`;
   
-  // 渠道配置（关键！）
+  // Session 配置（isolated session）
+  cmd += ` --session 'isolated'`;
+  
+  // Delivery 配置（关键！自动转发 LLM 回复）
+  cmd += ` --announce`;  // 替代 --delivery 'announce'
   cmd += ` --channel '${channel}'`;
   cmd += ` --to '${to}'`;
   
@@ -171,7 +172,7 @@ function createCronJob(name, schedule, message, channelConfig, options = {}) {
     cmd += ` --account '${account}'`;
   }
   
-  // 其他选项
+  // 运行后自动删除
   if (deleteAfterRun) {
     cmd += ' --delete-after-run';
   }
@@ -180,6 +181,7 @@ function createCronJob(name, schedule, message, channelConfig, options = {}) {
   
   console.log(`创建 Cron 任务：${name}`);
   console.log(`渠道：${channel}, 目标：${to}`);
+  console.log(`Payload: ${payloadMessage.substring(0, 100)}...`);
   const result = exec(cmd);
   
   if (result.success) {
@@ -246,19 +248,18 @@ function listCalendarCrons() {
 // ============================================================================
 
 /**
- * 为事件阶段创建 Cron 任务（多渠道 - 方案 C：固定渠道 + LLM 生成文案）
+ * 为事件阶段创建 Cron 任务（多渠道 + 新逻辑：LLM 只生成文案，delivery 自动转发）
  * 
  * @param {Object} options - 选项
  * @param {string} options.eventId - 事件 ID
  * @param {string} options.stageId - 阶段 ID
- * @param {Object} options.event - 完整事件对象
+ * @param {Object} options.event - 事件对象（包含 title、schedule 等）
  * @param {string} options.eventTime - 事件时间（ISO 8601）
  * @param {number} options.offset - 提前量
  * @param {string} options.offsetUnit - 提前量单位（minutes/hours/days）
- * @param {Object} options.channelConfig - 渠道配置
  * @returns {Object} 创建结果
  */
-function createReminderCron({ eventId, stageId, event, eventTime, offset, offsetUnit, channelConfig }) {
+function createReminderCron({ eventId, stageId, event, eventTime, offset, offsetUnit }) {
   // 计算触发时间
   const eventDate = new Date(eventTime);
   const offsetMs = offset * (
@@ -286,12 +287,14 @@ function createReminderCron({ eventId, stageId, event, eventTime, offset, offset
     at: triggerTime.toISOString()
   };
   
-  // 为指定渠道创建 Cron 任务（方案 C：固定渠道 + LLM 生成文案）
-  const cronName = `claw-calendar-${eventId}-${stageId}-${channelConfig.type}`;
-  
-  // 构建生成式 Payload（方案 C）
-  const channelName = channelConfig.type === 'qq' ? 'QQ' : '微信';
-  const payloadMessage = `【提醒生成任务】
+  // 为每个渠道创建 Cron 任务（新逻辑：LLM 只生成文案，delivery 自动转发）
+  const results = [];
+  for (const channelConfig of channels) {
+    const cronName = `claw-calendar-${eventId}-${stageId}-${channelConfig.type}`;
+    
+    // 构建生成式 Payload（新逻辑）
+    const channelName = channelConfig.type === 'qq' ? 'QQ' : '微信';
+    const payloadMessage = `【提醒生成任务】
 
 事件信息：
 - 标题：${event.title}
@@ -311,25 +314,16 @@ function createReminderCron({ eventId, stageId, event, eventTime, offset, offset
 4. 不要解释、不要总结
 
 你的回复会被自动推送给用户。`;
-  
-  const result = createCronJob(cronName, schedule, payloadMessage, channelConfig);
-  
-  if (result.success) {
-    return {
-      success: true,
-      triggerTime: triggerTime.toISOString(),
-      channels: [{
+    
+    const result = createCronJob(cronName, schedule, payloadMessage, channelConfig);
+    
+    if (result.success) {
+      results.push({
         channel: channelConfig.type,
         cronJobId: result.cronJobId,
         to: result.to
-      }],
-      message: payloadMessage
-    };
-  } else {
-    return {
-      success: false,
-      error: result.error || '创建失败'
-    };
+      });
+    }
   }
   
   if (results.length > 0) {
@@ -337,7 +331,7 @@ function createReminderCron({ eventId, stageId, event, eventTime, offset, offset
       success: true,
       triggerTime: triggerTime.toISOString(),
       channels: results,
-      message: message
+      message: '已创建 Cron 任务（LLM 只生成文案，delivery 自动转发）'
     };
   } else {
     return {
@@ -377,16 +371,16 @@ function updateReminderCrons(eventId, newEventTime) {
     }
   }
   
-  // 2. 重新创建 Cron 任务
+  // 2. 重新创建 Cron 任务（新逻辑：传入完整 event 对象）
   const createdCrons = [];
   for (const stage of event.reminderStages) {
     const result = createReminderCron({
       eventId: eventId,
       stageId: stage.id,
+      event: event,  // 传入完整事件对象
       eventTime: newEventTime,
       offset: stage.offset,
-      offsetUnit: stage.offsetUnit || 'minutes',
-      message: stage.message || `${stage.offset} ${stage.offsetUnit} 后提醒`
+      offsetUnit: stage.offsetUnit || 'minutes'
     });
     
     if (result.success) {

@@ -40,18 +40,21 @@ function setupCronJobs() {
     {
       name: 'claw-calendar-remind',
       schedule: '*/30 * * * *',  // 每 30 分钟
+      timezone: 'Asia/Shanghai',
       description: '检查日历提醒并推送给所有已知用户',
       message: '检查日历提醒，推送即将发生的事件到 QQ 和微信。如果有事件，调用 calendar_get_reminders(30) 获取事件，然后调用 calendar_push_reminders 推送。如果没有事件，回复 HEARTBEAT_OK。'
     },
     {
       name: 'claw-calendar-daily',
-      schedule: '0 2 * * *',  // 每天凌晨 2 点
+      schedule: '0 2 * * *',  // 北京时间凌晨 2 点
+      timezone: 'Asia/Shanghai',
       description: '每日索引重建任务',
       message: '执行每日索引重建任务。调用 calendar_build_today_index 和 calendar_build_upcoming_index 重建索引，然后调用 calendar_cleanup_expired_plans 清理过期事件。完成后回复 HEARTBEAT_OK。'
     },
     {
       name: 'claw-calendar-weekly',
-      schedule: '0 0 * * 1',  // 每周一凌晨 0 点
+      schedule: '0 0 * * 1',  // 北京时间周一凌晨 0 点
+      timezone: 'Asia/Shanghai',
       description: '每周总结归档任务',
       message: '执行每周总结归档任务。调用 calendar_archive_last_week_plans 归档上周计划，然后调用 calendar_generate_weekly_report 生成周总结。完成后回复 HEARTBEAT_OK。'
     }
@@ -65,7 +68,7 @@ function setupCronJobs() {
     console.log(`   说明：${job.description}\n`);
     
     // 检查是否已存在
-    const checkCmd = `openclaw cron list --name '${job.name}'`;
+    const checkCmd = `openclaw cron list`;
     const checkResult = exec(checkCmd);
     
     if (checkResult.output && checkResult.output.includes(job.name)) {
@@ -74,8 +77,8 @@ function setupCronJobs() {
       continue;
     }
     
-    // 创建 Cron 任务
-    const createCmd = `openclaw cron add --schedule '${job.schedule}' --name '${job.name}' --payload '{"kind": "agentTurn", "message": "${job.message}"}'`;
+    // 创建 Cron 任务（添加时区参数）
+    const createCmd = `openclaw cron add --cron '${job.schedule}' --name '${job.name}' --message '${job.message}' --tz '${job.timezone || 'UTC'}'`;
     
     const result = exec(createCmd);
     
