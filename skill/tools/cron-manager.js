@@ -127,9 +127,15 @@ function parseCronList(output) {
 /**
  * 创建 Cron 任务（支持多渠道）
  * 
+ * 关键设计：
+ * - Payload 是简单消息（如 "🔔 提醒：5 分钟后去喝水"）
+ * - LLM 收到后直接调用 message 工具发送
+ * - 无需调用 calendar_push_reminder 工具
+ * - 与 5 点测试完全一致
+ * 
  * @param {string} name - 任务名称
  * @param {Object} schedule - 调度配置
- * @param {string} message - 消息内容
+ * @param {string} message - 消息内容（简单消息，如 "🔔 提醒：5 分钟后去喝水"）
  * @param {Object} channelConfig - 渠道配置
  * @param {Object} options - 其他选项
  * @returns {Object} 创建结果
@@ -240,18 +246,19 @@ function listCalendarCrons() {
 // ============================================================================
 
 /**
- * 为事件阶段创建 Cron 任务（多渠道）
+ * 为事件阶段创建 Cron 任务（多渠道 - 方案 C：固定渠道 + LLM 生成文案）
  * 
  * @param {Object} options - 选项
  * @param {string} options.eventId - 事件 ID
  * @param {string} options.stageId - 阶段 ID
+ * @param {Object} options.event - 完整事件对象
  * @param {string} options.eventTime - 事件时间（ISO 8601）
  * @param {number} options.offset - 提前量
  * @param {string} options.offsetUnit - 提前量单位（minutes/hours/days）
- * @param {string} options.message - 推送消息
+ * @param {Object} options.channelConfig - 渠道配置
  * @returns {Object} 创建结果
  */
-function createReminderCron({ eventId, stageId, eventTime, offset, offsetUnit, message }) {
+function createReminderCron({ eventId, stageId, event, eventTime, offset, offsetUnit, channelConfig }) {
   // 计算触发时间
   const eventDate = new Date(eventTime);
   const offsetMs = offset * (
@@ -279,20 +286,50 @@ function createReminderCron({ eventId, stageId, eventTime, offset, offsetUnit, m
     at: triggerTime.toISOString()
   };
   
-  // 为每个渠道创建 Cron 任务
-  const results = [];
-  for (const channelConfig of channels) {
-    const cronName = `claw-calendar-${eventId}-${stageId}-${channelConfig.type}`;
-    
-    const result = createCronJob(cronName, schedule, message, channelConfig);
-    
-    if (result.success) {
-      results.push({
+  // 为指定渠道创建 Cron 任务（方案 C：固定渠道 + LLM 生成文案）
+  const cronName = `claw-calendar-${eventId}-${stageId}-${channelConfig.type}`;
+  
+  // 构建生成式 Payload（方案 C）
+  const channelName = channelConfig.type === 'qq' ? 'QQ' : '微信';
+  const payloadMessage = `【提醒生成任务】
+
+事件信息：
+- 标题：${event.title}
+- 时间：${event.schedule.date} ${event.schedule.startTime}（北京时间）
+- 类型：${channelName}渠道提醒
+
+请生成一条温馨、有人情味的提醒文案：
+- 语气：温暖、友好、自然
+- 长度：1-2 句话
+- 包含：时间、事件、关怀
+- 风格：像朋友一样的提醒
+
+重要指令：
+1. 不要调用任何工具（包括 message 工具）
+2. 直接回复提醒文案即可
+3. 不要发送确认消息
+4. 不要解释、不要总结
+
+你的回复会被自动推送给用户。`;
+  
+  const result = createCronJob(cronName, schedule, payloadMessage, channelConfig);
+  
+  if (result.success) {
+    return {
+      success: true,
+      triggerTime: triggerTime.toISOString(),
+      channels: [{
         channel: channelConfig.type,
         cronJobId: result.cronJobId,
         to: result.to
-      });
-    }
+      }],
+      message: payloadMessage
+    };
+  } else {
+    return {
+      success: false,
+      error: result.error || '创建失败'
+    };
   }
   
   if (results.length > 0) {

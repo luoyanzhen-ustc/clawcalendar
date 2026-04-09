@@ -138,35 +138,46 @@ function appendPlan(plan) {
     return { success: false, error: '无法解析事件时间' };
   }
   
-  // 为每个阶段创建 Cron 任务（多渠道）
+  // 为每个阶段创建 Cron 任务（方案 C：固定渠道 + LLM 生成文案）
   const createdCrons = [];
+  
+  // 获取用户配置和启用的渠道
+  const cronManager = require('./cron-manager.js');
+  const userConfig = cronManager.getUserChannelConfig();
+  const channels = cronManager.getEnabledChannels(userConfig);
+  
   for (const stage of event.reminderStages) {
-    const cronResult = createReminderCron({
-      eventId: event.id,
-      stageId: stage.id,
-      eventTime: eventTime,
-      offset: stage.offset,
-      offsetUnit: stage.offsetUnit || 'minutes',
-      message: stage.message || `${stage.offset} ${stage.offsetUnit} 后提醒`
-    });
+    // 为每个渠道创建独立的 Cron 任务
+    const stageCronIds = [];
+    stage.pushedChannels = {};
     
-    if (cronResult.success) {
-      // v4.0 Schema: 存储多个 Cron ID
-      stage.cronJobIds = cronResult.channels.map(c => c.cronJobId);
-      stage.triggerTime = cronResult.triggerTime;
-      // 初始化推送状态
-      stage.pushedChannels = {};
-      for (const ch of cronResult.channels) {
+    for (const channelConfig of channels) {
+      const cronResult = createReminderCron({
+        eventId: event.id,
+        stageId: stage.id,
+        event: event,  // 传递完整事件对象
+        eventTime: event.schedule.utcStart,
+        offset: stage.offset,
+        offsetUnit: stage.offsetUnit || 'minutes',
+        channelConfig: channelConfig  // 传递渠道配置
+      });
+      
+      if (cronResult.success) {
+        const ch = cronResult.channels[0];
+        stageCronIds.push(ch.cronJobId);
         stage.pushedChannels[ch.channel] = {
           pushedAt: null,
           cronJobId: ch.cronJobId,
           status: 'pending'
         };
+        createdCrons.push(ch.cronJobId);
+      } else {
+        console.error(`创建 ${channelConfig.type} Cron 任务失败：${cronResult.error}`);
       }
-      createdCrons.push(...stage.cronJobIds);
-    } else {
-      console.error(`创建 Cron 任务失败：${cronResult.error}`);
     }
+    
+    stage.cronJobIds = stageCronIds;
+    stage.triggerTime = new Date(event.schedule.utcStart).toISOString();
   }
   
   savePlan(event);
